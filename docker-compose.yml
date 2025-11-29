@@ -1,0 +1,9 @@
+services:
+  audio-stream-gateway:
+    build:
+      context: .
+      dockerfile: apps/audio-stream-gateway/Dockerfile
+    env_file: apps/audio-stream-gateway/.env
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

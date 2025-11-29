@@ -1,0 +1,6 @@
+node_modules
+.git
+.DS_Store
+apps/mobile-audio-player/node_modules
+apps/mobile-audio-player/.expo
+apps/mobile-audio-player/.expo-shared

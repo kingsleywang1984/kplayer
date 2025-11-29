@@ -1,0 +1,16 @@
+{
+  "name": "kplayer-monorepo",
+  "version": "1.0.0",
+  "description": "Kingsley's Player",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev:gateway": "pnpm --filter audio-stream-gateway dev",
+    "start:gateway": "pnpm --filter audio-stream-gateway start",
+    "dev:mobile": "pnpm --filter mobile-audio-player start"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "private": true
+}

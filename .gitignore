@@ -1,0 +1,9 @@
+.codex/
+
+node_modules/
+tmp/
+
+.DS_Store
+.env
+
+kplayer.sdd.txt
