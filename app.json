@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "fdc12cab-030b-4ea2-bc0d-9553b765e504"
+      }
+    },
+    "owner": "kingsleywang",
+    "slug": "kplayer"
+  }
+}

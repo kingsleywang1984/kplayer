@@ -9,6 +9,10 @@ const storage = require('./storage/r2Storage');
 
 const app = express();
 
+const YOUTUBE_SEARCH_ENDPOINT = 'https://www.googleapis.com/youtube/v3/search';
+const MUSIC_CATEGORY_ID = '10';
+const YOUTUBE_MAX_RESULTS = 5;
+
 app.use(
   cors({
     origin: '*',
@@ -20,6 +24,25 @@ app.use(express.json({ limit: '1mb' }));
 
 app.get('/healthz', (_, res) => {
   res.json({ status: 'ok' });
+});
+
+app.get('/search', async (req, res) => {
+  if (!config.youtube?.apiKey) {
+    return res.status(503).json({ message: 'YouTube search is not configured' });
+  }
+
+  const query = String(req.query.q ?? '').trim();
+  if (!query) {
+    return res.status(400).json({ message: 'Missing search query' });
+  }
+
+  try {
+    const results = await searchYouTubeSongs(query);
+    res.json({ results });
+  } catch (error) {
+    console.error('YouTube search failed', error);
+    res.status(502).json({ message: 'Failed to search YouTube' });
+  }
 });
 
 app.get('/tracks', async (_req, res, next) => {
@@ -186,6 +209,51 @@ async function fetchVideoInfo(videoId) {
       }
     });
   });
+}
+
+async function searchYouTubeSongs(query, maxResults = YOUTUBE_MAX_RESULTS) {
+  const params = new URLSearchParams({
+    key: config.youtube.apiKey,
+    part: 'snippet',
+    q: query,
+    type: 'video',
+    videoCategoryId: MUSIC_CATEGORY_ID,
+    maxResults: String(maxResults),
+    order: 'relevance',
+    safeSearch: 'none',
+    fields: 'items(id/videoId,snippet/title,snippet/description,snippet/channelTitle,snippet/thumbnails/medium,snippet/thumbnails/default,snippet/publishedAt)',
+  });
+
+  const response = await fetch(`${YOUTUBE_SEARCH_ENDPOINT}?${params.toString()}`);
+  if (!response.ok) {
+    const errorPayload = await response.text();
+    throw new Error(`YouTube API error ${response.status}: ${errorPayload}`);
+  }
+
+  const payload = await response.json();
+  const items = Array.isArray(payload.items) ? payload.items : [];
+
+  return items
+    .map((item) => {
+      const videoId = item?.id?.videoId;
+      if (!videoId) {
+        return null;
+      }
+
+      const snippet = item.snippet ?? {};
+      const thumbnailUrl =
+        snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || null;
+
+      return {
+        videoId,
+        title: snippet.title ?? '未知标题',
+        channelTitle: snippet.channelTitle ?? null,
+        description: snippet.description ?? null,
+        thumbnailUrl,
+        publishedAt: snippet.publishedAt ?? null,
+      };
+    })
+    .filter(Boolean);
 }
 
 app.get('/stream/:videoId', async (req, res, next) => {
