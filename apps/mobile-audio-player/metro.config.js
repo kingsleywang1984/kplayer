@@ -1,8 +1,13 @@
 const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
+const exclusionList = (additionalExclusions) => {
+    return new RegExp(additionalExclusions.map((re) => `(${re.source})`).join('|'));
+};
 
 const projectRoot = __dirname;
 const workspaceRoot = path.resolve(projectRoot, '../..');
+
+const escape = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const config = getDefaultConfig(projectRoot);
 
@@ -22,6 +27,25 @@ config.resolver.extraNodeModules = {
     'react-native': path.resolve(projectRoot, 'node_modules/react-native'),
     'react-dom': path.resolve(projectRoot, 'node_modules/react-dom'),
     '@expo/vector-icons': path.resolve(projectRoot, 'node_modules/@expo/vector-icons'),
+};
+
+const blockList = exclusionList([
+    new RegExp(`^${escape(path.resolve(workspaceRoot, 'node_modules/react'))}\\/.*$`),
+    new RegExp(`^${escape(path.resolve(workspaceRoot, 'node_modules/react-native'))}\\/.*$`),
+    new RegExp(`^${escape(path.resolve(workspaceRoot, 'node_modules/react-dom'))}\\/.*$`),
+]);
+
+config.resolver.blacklistRE = blockList;
+config.resolver.blockList = blockList;
+
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+    if (
+        moduleName.startsWith('three/examples/jsm/') &&
+        !moduleName.endsWith('.js')
+    ) {
+        return context.resolveRequest(context, moduleName + '.js', platform);
+    }
+    return context.resolveRequest(context, moduleName, platform);
 };
 
 module.exports = config;
