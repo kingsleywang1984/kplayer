@@ -4,6 +4,7 @@ import { Galaxy3D } from '@/components/Galaxy3D';
 import { RainbowZappers } from '@/components/RainbowZappers';
 import { ParticleSphere } from '@/components/ParticleSphere';
 import { TunnelAnimation } from '@/components/TunnelAnimation';
+import { Wormhole } from '@/components/Wormhole';
 import { useSettings } from '@/context/settings-context';
 
 interface AppBackgroundProps {
@@ -27,6 +28,10 @@ export function AppBackground({ style }: AppBackgroundProps) {
 
     if (backgroundMode === 'tunnel_animation') {
         return <TunnelAnimation style={style} />;
+    }
+
+    if (backgroundMode === 'wormhole') {
+        return <Wormhole style={style} />;
     }
 
     return <View style={[styles.container, style]} />;

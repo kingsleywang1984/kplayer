@@ -74,5 +74,5 @@ export const SETTINGS_DEFAULTS = {
   backgroundMode: 'galaxy' as BackgroundMode,
 };
 
-export type BackgroundMode = 'galaxy' | 'pure_black' | 'rainbow_zappers' | 'particle_sphere' | 'tunnel_animation';
+export type BackgroundMode = 'galaxy' | 'pure_black' | 'rainbow_zappers' | 'particle_sphere' | 'tunnel_animation' | 'wormhole';
 

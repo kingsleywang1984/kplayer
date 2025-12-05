@@ -72,7 +72,9 @@ export default function SettingsScreen() {
                       ? '粒子球体'
                       : backgroundMode === 'tunnel_animation'
                         ? '旋转隧道'
-                        : '纯黑背景'}
+                        : backgroundMode === 'wormhole'
+                          ? '时空虫洞'
+                          : '纯黑背景'}
               </Text>
               <Text style={styles.cardDescription}>
                 选择您喜欢的应用背景风格。
@@ -141,6 +143,22 @@ export default function SettingsScreen() {
                   ]}
                 >
                   隧道
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setBackgroundMode('wormhole')}
+                style={[
+                  styles.modeButton,
+                  backgroundMode === 'wormhole' && styles.modeButtonActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modeButtonText,
+                    backgroundMode === 'wormhole' && styles.modeButtonTextActive,
+                  ]}
+                >
+                  虫洞
                 </Text>
               </Pressable>
               <Pressable
