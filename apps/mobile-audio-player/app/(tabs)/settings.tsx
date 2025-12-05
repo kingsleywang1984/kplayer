@@ -68,13 +68,15 @@ export default function SettingsScreen() {
                   ? '星空特效'
                   : backgroundMode === 'rainbow_zappers'
                     ? '炫酷电光'
-                    : '纯黑背景'}
+                    : backgroundMode === 'particle_sphere'
+                      ? '粒子球体'
+                      : '纯黑背景'}
               </Text>
               <Text style={styles.cardDescription}>
                 选择您喜欢的应用背景风格。
               </Text>
             </View>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
               <Pressable
                 onPress={() => setBackgroundMode('galaxy')}
                 style={[
@@ -105,6 +107,22 @@ export default function SettingsScreen() {
                   ]}
                 >
                   电光
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setBackgroundMode('particle_sphere')}
+                style={[
+                  styles.modeButton,
+                  backgroundMode === 'particle_sphere' && styles.modeButtonActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modeButtonText,
+                    backgroundMode === 'particle_sphere' && styles.modeButtonTextActive,
+                  ]}
+                >
+                  粒子
                 </Text>
               </Pressable>
               <Pressable
