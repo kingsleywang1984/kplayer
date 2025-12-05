@@ -63,7 +63,12 @@ export default function SettingsScreen() {
             <View style={styles.cardText}>
               <Text style={styles.cardTitle}>背景设置</Text>
               <Text style={styles.cardSubtitle}>
-                当前背景：{backgroundMode === 'galaxy' ? '星空特效' : '纯黑背景'}
+                当前背景：
+                {backgroundMode === 'galaxy'
+                  ? '星空特效'
+                  : backgroundMode === 'rainbow_zappers'
+                    ? '炫酷电光'
+                    : '纯黑背景'}
               </Text>
               <Text style={styles.cardDescription}>
                 选择您喜欢的应用背景风格。
@@ -84,6 +89,22 @@ export default function SettingsScreen() {
                   ]}
                 >
                   星空
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setBackgroundMode('rainbow_zappers')}
+                style={[
+                  styles.modeButton,
+                  backgroundMode === 'rainbow_zappers' && styles.modeButtonActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modeButtonText,
+                    backgroundMode === 'rainbow_zappers' && styles.modeButtonTextActive,
+                  ]}
+                >
+                  电光
                 </Text>
               </Pressable>
               <Pressable

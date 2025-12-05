@@ -778,11 +778,8 @@ export default function HomeScreen() {
       <AppBackground style={{ position: 'absolute', width: '100%', height: '100%' }} />
       <View style={styles.container}>
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
-          <Text variant="headlineMedium" style={[styles.heading, { color: theme.colors.onBackground }]}>
+          <Text variant="headlineMedium" style={[styles.heading, { color: 'white' }]}>
             Kingsley Player
-          </Text>
-          <Text variant="bodyMedium" style={[styles.subtitle, { color: theme.colors.onSurfaceVariant }]}>
-            Immersive Audio Experience
           </Text>
 
           <BlurView intensity={20} tint="dark" style={styles.glassCard}>
