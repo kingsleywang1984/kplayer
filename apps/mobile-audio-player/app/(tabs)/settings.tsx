@@ -70,7 +70,9 @@ export default function SettingsScreen() {
                     ? '炫酷电光'
                     : backgroundMode === 'particle_sphere'
                       ? '粒子球体'
-                      : '纯黑背景'}
+                      : backgroundMode === 'tunnel_animation'
+                        ? '旋转隧道'
+                        : '纯黑背景'}
               </Text>
               <Text style={styles.cardDescription}>
                 选择您喜欢的应用背景风格。
@@ -123,6 +125,22 @@ export default function SettingsScreen() {
                   ]}
                 >
                   粒子
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setBackgroundMode('tunnel_animation')}
+                style={[
+                  styles.modeButton,
+                  backgroundMode === 'tunnel_animation' && styles.modeButtonActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modeButtonText,
+                    backgroundMode === 'tunnel_animation' && styles.modeButtonTextActive,
+                  ]}
+                >
+                  隧道
                 </Text>
               </Pressable>
               <Pressable

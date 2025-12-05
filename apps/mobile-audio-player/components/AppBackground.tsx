@@ -3,6 +3,7 @@ import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { Galaxy3D } from '@/components/Galaxy3D';
 import { RainbowZappers } from '@/components/RainbowZappers';
 import { ParticleSphere } from '@/components/ParticleSphere';
+import { TunnelAnimation } from '@/components/TunnelAnimation';
 import { useSettings } from '@/context/settings-context';
 
 interface AppBackgroundProps {
@@ -22,6 +23,10 @@ export function AppBackground({ style }: AppBackgroundProps) {
 
     if (backgroundMode === 'particle_sphere') {
         return <ParticleSphere style={style} />;
+    }
+
+    if (backgroundMode === 'tunnel_animation') {
+        return <TunnelAnimation style={style} />;
     }
 
     return <View style={[styles.container, style]} />;
