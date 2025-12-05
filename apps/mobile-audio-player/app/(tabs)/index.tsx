@@ -108,7 +108,7 @@ const extractVideoId = (input: string): string | null => {
   return null;
 };
 
-import { Galaxy3D } from '@/components/Galaxy3D';
+import { AppBackground } from '@/components/AppBackground';
 import { BlurView } from 'expo-blur';
 
 export default function HomeScreen() {
@@ -775,7 +775,7 @@ export default function HomeScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: 'black' }}>
-      <Galaxy3D style={{ position: 'absolute', width: '100%', height: '100%' }} />
+      <AppBackground style={{ position: 'absolute', width: '100%', height: '100%' }} />
       <View style={styles.container}>
         <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
           <Text variant="headlineMedium" style={[styles.heading, { color: theme.colors.onBackground }]}>
@@ -887,7 +887,7 @@ export default function HomeScreen() {
                   )
                 ) : (
                   <View style={[styles.albumArt, { overflow: 'hidden', backgroundColor: 'black' }]}>
-                    <Galaxy3D style={{ width: '100%', height: '100%' }} />
+                    <AppBackground style={{ width: '100%', height: '100%' }} />
                   </View>
                 )}
               </View>

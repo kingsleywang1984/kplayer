@@ -1,19 +1,25 @@
-import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Switch, Text, View, Pressable } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 
 import { Colors } from '@/constants/theme';
 import { SETTINGS_DEFAULTS, useSettings } from '@/context/settings-context';
-import { Galaxy3D } from '@/components/Galaxy3D';
+import { AppBackground } from '@/components/AppBackground';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
 
 type GatewayStatus = 'checking' | 'online' | 'offline';
 
 export default function SettingsScreen() {
-  const { autoRefreshEnabled, keepAliveEnabled, setAutoRefreshEnabled, setKeepAliveEnabled } =
-    useSettings();
+  const {
+    autoRefreshEnabled,
+    keepAliveEnabled,
+    backgroundMode,
+    setAutoRefreshEnabled,
+    setKeepAliveEnabled,
+    setBackgroundMode,
+  } = useSettings();
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
 
   useEffect(() => {
@@ -47,10 +53,58 @@ export default function SettingsScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: 'black' }}>
-      <Galaxy3D style={{ position: 'absolute', width: '100%', height: '100%' }} />
+      <AppBackground style={{ position: 'absolute', width: '100%', height: '100%' }} />
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <Text style={styles.heading}>用户设置</Text>
         <Text style={styles.subtitle}>可在此覆盖 .env 中的自动刷新和保活配置。</Text>
+
+        <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+          <View style={styles.cardContent}>
+            <View style={styles.cardText}>
+              <Text style={styles.cardTitle}>背景设置</Text>
+              <Text style={styles.cardSubtitle}>
+                当前背景：{backgroundMode === 'galaxy' ? '星空特效' : '纯黑背景'}
+              </Text>
+              <Text style={styles.cardDescription}>
+                选择您喜欢的应用背景风格。
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable
+                onPress={() => setBackgroundMode('galaxy')}
+                style={[
+                  styles.modeButton,
+                  backgroundMode === 'galaxy' && styles.modeButtonActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modeButtonText,
+                    backgroundMode === 'galaxy' && styles.modeButtonTextActive,
+                  ]}
+                >
+                  星空
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setBackgroundMode('pure_black')}
+                style={[
+                  styles.modeButton,
+                  backgroundMode === 'pure_black' && styles.modeButtonActive,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.modeButtonText,
+                    backgroundMode === 'pure_black' && styles.modeButtonTextActive,
+                  ]}
+                >
+                  纯黑
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </BlurView>
 
         <BlurView intensity={20} tint="dark" style={styles.glassCard}>
           <View style={styles.cardContent}>
@@ -194,5 +248,28 @@ const styles = StyleSheet.create({
   },
   offline: {
     backgroundColor: '#ea4335',
+  },
+  modeButton: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  modeButtonActive: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderColor: '#fff',
+  },
+  modeButtonText: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modeButtonTextActive: {
+    color: '#fff',
   },
 });

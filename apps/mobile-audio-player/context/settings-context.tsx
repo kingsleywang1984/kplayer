@@ -32,8 +32,10 @@ const DEFAULT_KEEP_ALIVE_ENABLED = toBooleanWithDefaultTrue(keepAliveEnvValue);
 type SettingsContextValue = {
   autoRefreshEnabled: boolean;
   keepAliveEnabled: boolean;
+  backgroundMode: BackgroundMode;
   setAutoRefreshEnabled: (value: boolean) => void;
   setKeepAliveEnabled: (value: boolean) => void;
+  setBackgroundMode: (value: BackgroundMode) => void;
 };
 
 const SettingsContext = createContext<SettingsContextValue | undefined>(undefined);
@@ -41,15 +43,18 @@ const SettingsContext = createContext<SettingsContextValue | undefined>(undefine
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(DEFAULT_AUTO_REFRESH_ENABLED);
   const [keepAliveEnabled, setKeepAliveEnabled] = useState(DEFAULT_KEEP_ALIVE_ENABLED);
+  const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>('galaxy');
 
   const value = useMemo(
     () => ({
       autoRefreshEnabled,
       keepAliveEnabled,
+      backgroundMode,
       setAutoRefreshEnabled,
       setKeepAliveEnabled,
+      setBackgroundMode,
     }),
-    [autoRefreshEnabled, keepAliveEnabled]
+    [autoRefreshEnabled, keepAliveEnabled, backgroundMode]
   );
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
@@ -66,5 +71,8 @@ export function useSettings() {
 export const SETTINGS_DEFAULTS = {
   autoRefreshEnabled: DEFAULT_AUTO_REFRESH_ENABLED,
   keepAliveEnabled: DEFAULT_KEEP_ALIVE_ENABLED,
+  backgroundMode: 'galaxy' as BackgroundMode,
 };
+
+export type BackgroundMode = 'galaxy' | 'pure_black';
 
