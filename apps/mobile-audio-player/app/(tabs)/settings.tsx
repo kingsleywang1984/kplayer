@@ -4,7 +4,7 @@ import { BlurView } from 'expo-blur';
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 
-import { Colors } from '@/constants/theme';
+import { Colors, TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
 import { SETTINGS_DEFAULTS, useSettings } from '@/context/settings-context';
 import { AppBackground } from '@/components/AppBackground';
 
@@ -305,7 +305,7 @@ export default function SettingsScreen() {
                   thumbTintColor={Colors.dark.tint}
                 />
               )}
-              <Text style={{ color: '#fff', minWidth: 24, textAlign: 'right', fontSize: 12 }}>{localIdleTimeout}s</Text>
+              <Text style={{ color: TextColors.primary, minWidth: 24, textAlign: 'right', fontSize: 12 }}>{localIdleTimeout}s</Text>
             </View>
           </View>
         </BlurView>
@@ -346,7 +346,7 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   heading: {
-    color: '#fff',
+    color: TextColors.primary,
     fontSize: 24,
     fontWeight: '700',
     textShadowColor: 'rgba(0, 0, 0, 0.75)',
@@ -354,40 +354,40 @@ const styles = StyleSheet.create({
     textShadowRadius: 3,
   },
   subtitle: {
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: TextColors.secondary,
     marginBottom: 8,
     textShadowColor: 'rgba(0, 0, 0, 0.75)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
   },
   glassCard: {
-    borderRadius: 16,
+    borderRadius: BorderRadius.lg,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    backgroundColor: 'rgba(30, 30, 40, 0.3)',
+    borderColor: BorderColors.subtle,
+    backgroundColor: SurfaceColors.card,
   },
   cardContent: {
-    padding: 16,
+    padding: Spacing.lg,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
   cardText: {
     flex: 1,
-    marginRight: 12,
+    marginRight: Spacing.md,
   },
   cardTitle: {
-    color: '#fff',
+    color: TextColors.primary,
     fontSize: 16,
     fontWeight: '600',
   },
   cardSubtitle: {
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: TextColors.secondary,
     marginTop: 4,
   },
   cardDescription: {
-    color: 'rgba(255, 255, 255, 0.5)',
+    color: TextColors.tertiary,
     fontSize: 14,
     marginTop: 8,
     lineHeight: 20,
@@ -402,17 +402,17 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   online: {
-    backgroundColor: '#34a853',
+    backgroundColor: StatusColors.success,
   },
   offline: {
-    backgroundColor: '#ea4335',
+    backgroundColor: StatusColors.error,
   },
   modeButton: {
     flex: 1,
     paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    paddingHorizontal: Spacing.lg,
+    borderRadius: BorderRadius.sm,
+    backgroundColor: SurfaceColors.hover,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -420,14 +420,14 @@ const styles = StyleSheet.create({
   },
   modeButtonActive: {
     backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    borderColor: '#fff',
+    borderColor: BorderColors.active,
   },
   modeButtonText: {
-    color: 'rgba(255, 255, 255, 0.6)',
+    color: TextColors.muted,
     fontSize: 14,
     fontWeight: '600',
   },
   modeButtonTextActive: {
-    color: '#fff',
+    color: TextColors.primary,
   },
 });

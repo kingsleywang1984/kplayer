@@ -22,6 +22,7 @@ import { NestableDraggableFlatList, NestableScrollContainer, ScaleDecorator, Ren
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useSettings } from '@/context/settings-context';
+import { TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
 const KEEP_ALIVE_INTERVAL_MS = 10 * 60 * 1000;
@@ -902,7 +903,7 @@ export default function HomeScreen() {
       <Animated.View style={[{ flex: 1 }, animatedOpacityStyle]}>
         <View style={styles.container}>
           <ScrollComponent style={{ flex: 1 }} contentContainerStyle={styles.content}>
-            <Text variant="headlineMedium" style={[styles.heading, { color: 'white' }]}>
+            <Text variant="headlineMedium" style={[styles.heading, { color: TextColors.primary }]}>
               Kingsley Player
             </Text>
 
@@ -1017,7 +1018,7 @@ export default function HomeScreen() {
                   <Text variant="titleMedium" numberOfLines={1} style={{ textAlign: 'center' }}>
                     {currentTrack?.title || 'No Track Playing'}
                   </Text>
-                  <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                  <Text variant="bodySmall" style={{ color: TextColors.secondary }}>
                     {currentTrack?.author || 'Unknown Artist'}
                   </Text>
                 </View>
@@ -1087,13 +1088,13 @@ export default function HomeScreen() {
                     }}
                   />
                   <View style={styles.timeRow}>
-                    <Text variant="labelSmall">{formatTime(displayedPosition)}</Text>
-                    <Text variant="labelSmall">{duration > 0 ? formatTime(duration) : '--:--'}</Text>
+                    <Text variant="labelSmall" style={{ color: TextColors.primary }}>{formatTime(displayedPosition)}</Text>
+                    <Text variant="labelSmall" style={{ color: TextColors.primary }}>{duration > 0 ? formatTime(duration) : '--:--'}</Text>
                   </View>
                 </View>
 
                 <View style={styles.loopRow}>
-                  <Text style={{ color: theme.colors.onSurface }}>Single Loop</Text>
+                  <Text style={{ color: TextColors.primary }}>Single Loop</Text>
                   <Switch
                     value={loopEnabled}
                     onValueChange={handleLoopToggle}
@@ -1113,7 +1114,7 @@ export default function HomeScreen() {
                 {tracksLoading ? (
                   <PaperActivityIndicator />
                 ) : tracks.length === 0 ? (
-                  <Text style={{ color: theme.colors.onSurfaceVariant }}>No cached tracks.</Text>
+                  <Text style={{ color: TextColors.secondary }}>No cached tracks.</Text>
                 ) : (
                   Platform.OS === 'web' ? (
                     <View style={{ height: 400 }}>
@@ -1127,8 +1128,8 @@ export default function HomeScreen() {
                             <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
                               <Card.Content style={styles.trackItemContent}>
                                 <View style={{ flex: 1 }}>
-                                  <Text variant="titleSmall" numberOfLines={1} style={{ color: 'white' }}>{item.title}</Text>
-                                  <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
+                                  <Text variant="titleSmall" numberOfLines={1} style={{ color: TextColors.primary }}>{item.title}</Text>
+                                  <Text variant="bodySmall" style={{ color: TextColors.secondary }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
                                 </View>
                                 <View style={styles.trackActions}>
                                   <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
@@ -1164,8 +1165,8 @@ export default function HomeScreen() {
                               <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }, isActive && { opacity: 0.7, backgroundColor: 'rgba(255,255,255,0.1)' }]}>
                                 <Card.Content style={styles.trackItemContent}>
                                   <View style={{ flex: 1 }}>
-                                    <Text variant="titleSmall" numberOfLines={1} style={{ color: 'white' }}>{item.title}</Text>
-                                    <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
+                                    <Text variant="titleSmall" numberOfLines={1} style={{ color: TextColors.primary }}>{item.title}</Text>
+                                    <Text variant="bodySmall" style={{ color: TextColors.secondary }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
                                   </View>
                                   <View style={styles.trackActions}>
                                     <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
@@ -1223,7 +1224,7 @@ export default function HomeScreen() {
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>{`My Groups (${groups.length})`}</Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Text variant="labelMedium" style={{ color: theme.colors.onSurface }}>Loop</Text>
+                  <Text variant="labelMedium" style={{ color: TextColors.primary }}>Loop</Text>
                   <Switch
                     value={groupLoopEnabled}
                     onValueChange={setGroupLoopEnabled}
@@ -1244,8 +1245,8 @@ export default function HomeScreen() {
                       <Card key={group.id} mode="contained" style={[styles.groupItem, activeGroupId === group.id && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
                         <Card.Content style={styles.groupItemContent}>
                           <View style={{ flex: 1 }}>
-                            <Text variant="titleSmall" style={{ color: 'white' }}>{group.name}</Text>
-                            <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{group.trackIds.length} tracks</Text>
+                            <Text variant="titleSmall" style={{ color: TextColors.primary }}>{group.name}</Text>
+                            <Text variant="bodySmall" style={{ color: TextColors.secondary }}>{group.trackIds.length} tracks</Text>
                           </View>
                           <View style={styles.trackActions}>
                             <IconButton icon="play" iconColor="white" onPress={() => handleGroupPlayback(group.id)} />
@@ -1296,7 +1297,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: 'white',
+    color: TextColors.primary,
     textShadowColor: 'rgba(0, 0, 0, 0.75)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,
@@ -1338,14 +1339,14 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   online: {
-    backgroundColor: '#34a853',
+    backgroundColor: StatusColors.success,
   },
   offline: {
-    backgroundColor: '#ea4335',
+    backgroundColor: StatusColors.error,
   },
   input: {
-    marginBottom: 12,
-    backgroundColor: '#1e1e28',
+    marginBottom: Spacing.md,
+    backgroundColor: SurfaceColors.input,
   },
   searchResultsContainer: {
     gap: 8,
@@ -1353,17 +1354,17 @@ const styles = StyleSheet.create({
   },
   searchResultCard: {
     borderWidth: 1,
-    borderRadius: 12,
-    padding: 8,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: Spacing.md,
   },
   searchThumbnail: {
     width: 64,
     height: 64,
-    borderRadius: 8,
-    backgroundColor: '#1f1f23',
+    borderRadius: BorderRadius.sm,
+    backgroundColor: SurfaceColors.input,
   },
   searchInfo: {
     flex: 1,
@@ -1399,15 +1400,15 @@ const styles = StyleSheet.create({
     height: '100%',
   },
   glassCard: {
-    borderRadius: 24,
+    borderRadius: BorderRadius.xxl,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    marginVertical: 20,
-    backgroundColor: 'rgba(30, 30, 40, 0.3)', // Reduced opacity
+    borderColor: BorderColors.subtle,
+    marginVertical: Spacing.xl,
+    backgroundColor: SurfaceColors.card,
   },
   cardContent: {
-    padding: 24,
+    padding: Spacing.xxl,
     backgroundColor: 'transparent',
   },
   trackInfoContainer: {
@@ -1418,8 +1419,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 20,
-    marginBottom: 20,
+    gap: Spacing.xl,
+    marginBottom: Spacing.xl,
   },
   sliderContainer: {
     marginTop: 10,
@@ -1443,11 +1444,11 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
   },
   trackItem: {
-    marginBottom: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)', // Reduced opacity
-    borderRadius: 12,
+    marginBottom: Spacing.md,
+    backgroundColor: SurfaceColors.listItem,
+    borderRadius: BorderRadius.md,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: BorderColors.subtle,
   },
   trackItemContent: {
     flexDirection: 'row',
@@ -1459,12 +1460,12 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   trackTitle: {
-    color: 'white',
+    color: TextColors.primary,
     fontSize: 16,
     fontWeight: '600',
   },
   trackArtist: {
-    color: 'rgba(255, 255, 255, 0.7)',
+    color: TextColors.secondary,
     fontSize: 14,
   },
   trackActions: {
@@ -1472,11 +1473,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   groupItem: {
-    marginBottom: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)', // Reduced opacity
-    borderRadius: 16,
+    marginBottom: Spacing.md,
+    backgroundColor: SurfaceColors.listItem,
+    borderRadius: BorderRadius.lg,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: BorderColors.subtle,
     overflow: 'hidden',
   },
   groupItemContent: {

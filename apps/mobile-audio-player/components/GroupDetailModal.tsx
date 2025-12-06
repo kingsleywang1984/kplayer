@@ -3,6 +3,7 @@ import React, { useState, useMemo } from 'react';
 import { View, ScrollView, StyleSheet, FlatList } from 'react-native';
 import { Modal, Portal, Text, Button, IconButton, useTheme, Card, Divider, FAB } from 'react-native-paper';
 import { BlurView } from 'expo-blur';
+import { TextColors, SurfaceColors, BorderColors, Spacing, BorderRadius } from '@/constants/theme';
 
 type TrackMetadata = {
     videoId: string;
@@ -70,7 +71,7 @@ export function GroupDetailModal({
                 <BlurView intensity={40} tint="dark" style={styles.blurContainer}>
                     <View style={styles.header}>
                         <View>
-                            <Text variant="headlineSmall" style={{ color: 'white' }}>{group.name}</Text>
+                            <Text variant="headlineSmall" style={{ color: TextColors.primary }}>{group.name}</Text>
                             <Text variant="bodySmall" style={{ color: theme.colors.outline }}>
                                 {group.trackIds.length} tracks
                             </Text>
@@ -86,12 +87,12 @@ export function GroupDetailModal({
                     {isAddingMode ? (
                         <View style={styles.content}>
                             <View style={styles.subHeader}>
-                                <Text variant="titleMedium" style={{ color: 'white' }}>Add Songs</Text>
+                                <Text variant="titleMedium" style={{ color: TextColors.primary }}>Add Songs</Text>
                                 <Button mode="text" onPress={() => setIsAddingMode(false)}>Done</Button>
                             </View>
                             {availableTracks.length === 0 ? (
                                 <View style={styles.emptyState}>
-                                    <Text variant="bodyMedium" style={{ color: 'rgba(255,255,255,0.5)' }}>No more tracks to add.</Text>
+                                    <Text variant="bodyMedium" style={{ color: TextColors.tertiary }}>No more tracks to add.</Text>
                                 </View>
                             ) : (
                                 <FlatList
@@ -101,8 +102,8 @@ export function GroupDetailModal({
                                         <Card style={styles.trackCard} mode="contained">
                                             <Card.Content style={styles.cardContent}>
                                                 <View style={styles.trackInfo}>
-                                                    <Text variant="bodyLarge" numberOfLines={1} style={{ color: 'white' }}>{item.title}</Text>
-                                                    <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.6)' }}>{item.author}</Text>
+                                                    <Text variant="bodyLarge" numberOfLines={1} style={{ color: TextColors.primary }}>{item.title}</Text>
+                                                    <Text variant="bodySmall" style={{ color: TextColors.muted }}>{item.author}</Text>
                                                 </View>
                                                 <IconButton
                                                     icon="plus"
@@ -124,7 +125,7 @@ export function GroupDetailModal({
                             </View>
                             {groupTracks.length === 0 ? (
                                 <View style={styles.emptyState}>
-                                    <Text variant="bodyMedium" style={{ color: 'rgba(255,255,255,0.5)' }}>No tracks in this group.</Text>
+                                    <Text variant="bodyMedium" style={{ color: TextColors.tertiary }}>No tracks in this group.</Text>
                                 </View>
                             ) : (
                                 <FlatList
@@ -134,8 +135,8 @@ export function GroupDetailModal({
                                         <Card style={styles.trackCard} mode="contained">
                                             <Card.Content style={styles.cardContent}>
                                                 <View style={styles.trackInfo}>
-                                                    <Text variant="bodyLarge" numberOfLines={1} style={{ color: 'white' }}>{item.title}</Text>
-                                                    <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.6)' }}>{item.author}</Text>
+                                                    <Text variant="bodyLarge" numberOfLines={1} style={{ color: TextColors.primary }}>{item.title}</Text>
+                                                    <Text variant="bodySmall" style={{ color: TextColors.muted }}>{item.author}</Text>
                                                 </View>
                                                 <IconButton
                                                     icon="delete"
@@ -163,9 +164,9 @@ const styles = StyleSheet.create({
         maxHeight: '80%',
     },
     blurContainer: {
-        padding: 20,
+        padding: Spacing.xl,
         height: '100%',
-        backgroundColor: 'rgba(30, 30, 40, 0.9)',
+        backgroundColor: SurfaceColors.modal,
     },
     header: {
         flexDirection: 'row',
@@ -178,7 +179,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     divider: {
-        backgroundColor: 'rgba(255,255,255,0.1)',
+        backgroundColor: BorderColors.subtle,
         marginBottom: 10,
     },
     content: {
@@ -191,8 +192,8 @@ const styles = StyleSheet.create({
         marginBottom: 10,
     },
     trackCard: {
-        marginBottom: 8,
-        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+        marginBottom: Spacing.sm,
+        backgroundColor: SurfaceColors.listItem,
     },
     cardContent: {
         flexDirection: 'row',
