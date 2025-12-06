@@ -951,11 +951,7 @@ export default function HomeScreen() {
                     />
                   }
                 />
-                {parsedVideoId && (
-                  <Text variant="bodySmall" style={{ color: theme.colors.primary }}>
-                    解析到的视频 ID：{parsedVideoId}
-                  </Text>
-                )}
+
                 {searchError ? (
                   <Text variant="bodySmall" style={[styles.searchErrorText, { color: theme.colors.error }]}>
                     {searchError}
@@ -1014,14 +1010,16 @@ export default function HomeScreen() {
                   )}
                 </View>
 
-                <View style={styles.trackInfoContainer}>
-                  <Text variant="titleMedium" numberOfLines={1} style={{ textAlign: 'center' }}>
-                    {currentTrack?.title || 'No Track Playing'}
-                  </Text>
-                  <Text variant="bodySmall" style={{ color: TextColors.secondary }}>
-                    {currentTrack?.author || 'Unknown Artist'}
-                  </Text>
-                </View>
+                {currentTrack && showBanner && (
+                  <View style={styles.trackInfoContainer}>
+                    <Text variant="titleMedium" numberOfLines={1} style={{ textAlign: 'center', color: TextColors.primary }}>
+                      {currentTrack.title}
+                    </Text>
+                    <Text variant="bodySmall" style={{ color: TextColors.secondary }}>
+                      {currentTrack.author}
+                    </Text>
+                  </View>
+                )}
 
                 <View style={styles.controls}>
                   <IconButton
@@ -1047,67 +1045,69 @@ export default function HomeScreen() {
                     onPress={stopPlayback}
                     disabled={playerState === 'idle'}
                   />
+                  <IconButton
+                    icon={loopEnabled ? "repeat-once" : "repeat-off"}
+                    mode={loopEnabled ? "contained" : "outlined"}
+                    containerColor={loopEnabled ? theme.colors.primary : undefined}
+                    iconColor={loopEnabled ? theme.colors.onPrimary : undefined}
+                    size={32}
+                    onPress={() => handleLoopToggle(!loopEnabled)}
+                    disabled={playerState === 'idle'}
+                  />
                 </View>
 
                 <Text variant="labelSmall" style={{ textAlign: 'center', marginTop: 10 }}>
                   {PLAYER_STATE_COPY[playerState]}
                 </Text>
 
-                <View style={styles.sliderContainer}>
-                  <Slider
-                    style={styles.slider}
-                    minimumValue={0}
-                    maximumValue={sliderMax}
-                    value={sliderValue}
-                    minimumTrackTintColor={theme.colors.primary}
-                    maximumTrackTintColor={theme.colors.surfaceVariant}
-                    thumbTintColor={theme.colors.primary}
-                    disabled={duration <= 0}
-                    onSlidingStart={(value) => {
-                      setIsSeeking(true);
-                      setSeekValue(value ?? 0);
-                    }}
-                    onValueChange={(value) => {
-                      if (!isSeeking) {
+                {playerState !== 'idle' && (
+                  <View style={styles.sliderContainer}>
+                    <Slider
+                      style={styles.slider}
+                      minimumValue={0}
+                      maximumValue={sliderMax}
+                      value={sliderValue}
+                      minimumTrackTintColor={theme.colors.primary}
+                      maximumTrackTintColor={theme.colors.surfaceVariant}
+                      thumbTintColor={theme.colors.primary}
+                      disabled={duration <= 0}
+                      onSlidingStart={(value) => {
                         setIsSeeking(true);
-                      }
-                      setSeekValue(value ?? 0);
-                    }}
-                    onSlidingComplete={async (value) => {
-                      const nextValue = value ?? 0;
-                      setIsSeeking(false);
-                      setSeekValue(nextValue);
-                      setPosition(nextValue);
-                      if (soundRef.current) {
-                        try {
-                          await soundRef.current.setPositionAsync(nextValue);
-                        } catch (error) {
-                          console.warn('Unable to seek playback', error);
+                        setSeekValue(value ?? 0);
+                      }}
+                      onValueChange={(value) => {
+                        if (!isSeeking) {
+                          setIsSeeking(true);
                         }
-                      }
-                    }}
-                  />
-                  <View style={styles.timeRow}>
-                    <Text variant="labelSmall" style={{ color: TextColors.primary }}>{formatTime(displayedPosition)}</Text>
-                    <Text variant="labelSmall" style={{ color: TextColors.primary }}>{duration > 0 ? formatTime(duration) : '--:--'}</Text>
+                        setSeekValue(value ?? 0);
+                      }}
+                      onSlidingComplete={async (value) => {
+                        const nextValue = value ?? 0;
+                        setIsSeeking(false);
+                        setSeekValue(nextValue);
+                        setPosition(nextValue);
+                        if (soundRef.current) {
+                          try {
+                            await soundRef.current.setPositionAsync(nextValue);
+                          } catch (error) {
+                            console.warn('Unable to seek playback', error);
+                          }
+                        }
+                      }}
+                    />
+                    <View style={styles.timeRow}>
+                      <Text variant="labelSmall" style={{ color: TextColors.primary }}>{formatTime(displayedPosition)}</Text>
+                      <Text variant="labelSmall" style={{ color: TextColors.primary }}>{duration > 0 ? formatTime(duration) : '--:--'}</Text>
+                    </View>
                   </View>
-                </View>
+                )}
 
-                <View style={styles.loopRow}>
-                  <Text style={{ color: TextColors.primary }}>Single Loop</Text>
-                  <Switch
-                    value={loopEnabled}
-                    onValueChange={handleLoopToggle}
-                    trackColor={{ false: '#767577', true: theme.colors.primary }}
-                    thumbColor={loopEnabled ? theme.colors.onPrimary : '#f4f3f4'}
-                  />
-                </View>
               </View>
             </BlurView>
 
             <BlurView intensity={20} tint="dark" style={styles.glassCard}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>{`My Tracks (${tracks.length})`}</Text>
+                <Text style={styles.sectionTitle}>{`Tracks (${tracks.length})`}</Text>
                 <IconButton icon="refresh" onPress={fetchTracks} iconColor={theme.colors.onSurface} />
               </View>
               <View style={styles.cardContent}>
@@ -1189,54 +1189,44 @@ export default function HomeScreen() {
               </View>
             </BlurView>
 
-            <BlurView intensity={20} tint="dark" style={styles.glassCard}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>Create Group</Text>
-              </View>
-              <View style={styles.cardContent}>
-                <TextInput
-                  mode="outlined"
-                  label="Group Name"
-                  value={newGroupName}
-                  onChangeText={setNewGroupName}
-                  style={styles.input}
-                  textColor="white"
-                  theme={{
-                    colors: {
-                      onSurfaceVariant: 'rgba(255, 255, 255, 0.7)',
-                      primary: 'white',
-                      background: '#1e1e28',
-                    },
-                  }}
-                />
-                <Button
-                  mode="contained"
-                  onPress={handleCreateGroup}
-                  disabled={!newGroupName.trim() || !selectedTrackIds.length}
-                  style={{ marginTop: 10 }}
-                >
-                  Create Group
-                </Button>
-              </View>
-            </BlurView>
+            {selectedTrackIds.length > 0 && (
+              <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>Create Group</Text>
+                </View>
+                <View style={styles.cardContent}>
+                  <TextInput
+                    mode="outlined"
+                    label="Group Name"
+                    value={newGroupName}
+                    onChangeText={setNewGroupName}
+                    style={styles.input}
+                    textColor="white"
+                    theme={{
+                      colors: {
+                        onSurfaceVariant: 'rgba(255, 255, 255, 0.7)',
+                        primary: 'white',
+                        background: '#1e1e28',
+                      },
+                    }}
+                  />
+                  <Button
+                    mode="contained"
+                    onPress={handleCreateGroup}
+                    disabled={!newGroupName.trim() || !selectedTrackIds.length}
+                    style={{ marginTop: 10 }}
+                  >
+                    Create Group
+                  </Button>
+                </View>
+              </BlurView>
+            )}
 
             <BlurView intensity={20} tint="dark" style={styles.glassCard}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>{`My Groups (${groups.length})`}</Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Text variant="labelMedium" style={{ color: TextColors.primary }}>Loop</Text>
-                  <Switch
-                    value={groupLoopEnabled}
-                    onValueChange={setGroupLoopEnabled}
-                    trackColor={{ false: '#767577', true: theme.colors.primary }}
-                    thumbColor={groupLoopEnabled ? theme.colors.onPrimary : '#f4f3f4'}
-                  />
-                </View>
+                <Text style={styles.sectionTitle}>{`Groups (${groups.length})`}</Text>
               </View>
               <View style={styles.cardContent}>
-                <View style={styles.loopRow}>
-                  {/* Loop toggle moved to header, keeping this empty or removing if not needed, but keeping structure for now if other content exists */}
-                </View>
                 <ScrollView style={{ maxHeight: 450 }} nestedScrollEnabled>
                   {groupsLoading ? (
                     <PaperActivityIndicator />
@@ -1252,6 +1242,11 @@ export default function HomeScreen() {
                             <IconButton icon="play" iconColor="white" onPress={() => handleGroupPlayback(group.id)} />
                             <IconButton icon="playlist-edit" iconColor="white" onPress={() => setViewingGroup(group)} />
                             <IconButton icon="delete" iconColor="white" onPress={() => handleDeleteGroup(group.id)} />
+                            <IconButton
+                              icon={groupLoopEnabled ? "repeat" : "repeat-off"}
+                              iconColor="white"
+                              onPress={() => setGroupLoopEnabled(!groupLoopEnabled)}
+                            />
                           </View>
                         </Card.Content>
                       </Card>
