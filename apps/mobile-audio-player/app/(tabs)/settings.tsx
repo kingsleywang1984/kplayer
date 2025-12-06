@@ -1,4 +1,5 @@
-import { ScrollView, StyleSheet, Switch, Text, View, Pressable } from 'react-native';
+import { ScrollView, StyleSheet, Switch, Text, View, Pressable, TextInput, Platform } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { BlurView } from 'expo-blur';
 import { useEffect, useState } from 'react';
 import axios from 'axios';
@@ -21,8 +22,15 @@ export default function SettingsScreen() {
     setBackgroundMode,
     showBanner,
     setShowBanner,
+    idleTimeout,
+    setIdleTimeout,
   } = useSettings();
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
+  const [localIdleTimeout, setLocalIdleTimeout] = useState(idleTimeout);
+
+  useEffect(() => {
+    setLocalIdleTimeout(idleTimeout);
+  }, [idleTimeout]);
 
   useEffect(() => {
     let mounted = true;
@@ -245,6 +253,60 @@ export default function SettingsScreen() {
               onValueChange={setAutoRefreshEnabled}
               trackColor={{ true: Colors.dark.tint, false: '#5f6368' }}
             />
+          </View>
+        </BlurView>
+
+        <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+          <View style={styles.cardContent}>
+            <View style={styles.cardText}>
+              <Text style={styles.cardTitle}>闲置自动淡出/后台</Text>
+              <Text style={styles.cardSubtitle}>
+                {localIdleTimeout > 0 ? `${localIdleTimeout} 秒后执行` : '已关闭'}
+              </Text>
+              <Text style={styles.cardDescription}>
+                播放时若无操作，Web端淡出界面，Mobile端切入后台。设为 0 关闭。
+              </Text>
+            </View>
+            <View style={{ width: 160, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {Platform.OS === 'web' ? (
+                // @ts-ignore
+                <input
+                  type="range"
+                  min="0"
+                  max="60"
+                  step="1"
+                  value={localIdleTimeout}
+                  onInput={(e: any) => {
+                    const val = parseInt(e.target.value, 10);
+                    setLocalIdleTimeout(val);
+                  }}
+                  onChange={(e: any) => {
+                    const val = parseInt(e.target.value, 10);
+                    setIdleTimeout(val);
+                  }}
+                  style={{
+                    flex: 1,
+                    accentColor: Colors.dark.tint,
+                    cursor: 'pointer',
+                    height: 40,
+                  }}
+                />
+              ) : (
+                <Slider
+                  style={{ flex: 1, height: 40 }}
+                  minimumValue={0}
+                  maximumValue={60}
+                  step={1}
+                  value={localIdleTimeout}
+                  onValueChange={setLocalIdleTimeout}
+                  onSlidingComplete={setIdleTimeout}
+                  minimumTrackTintColor={Colors.dark.tint}
+                  maximumTrackTintColor="#5f6368"
+                  thumbTintColor={Colors.dark.tint}
+                />
+              )}
+              <Text style={{ color: '#fff', minWidth: 24, textAlign: 'right', fontSize: 12 }}>{localIdleTimeout}s</Text>
+            </View>
           </View>
         </BlurView>
 

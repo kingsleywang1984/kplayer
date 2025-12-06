@@ -8,6 +8,7 @@ import {
   View,
   Platform,
   FlatList,
+  BackHandler,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Audio, AVPlaybackStatus } from 'expo-av';
@@ -118,7 +119,9 @@ import { BlurView } from 'expo-blur';
 import { GroupDetailModal } from '@/components/GroupDetailModal';
 
 export default function HomeScreen() {
-  const { autoRefreshEnabled, keepAliveEnabled, showBanner } = useSettings();
+  const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout } = useSettings();
+  const isIdleShared = useSharedValue(0); // 0 = not idle, 1 = idle
+  const idleTimerRef = useRef<any>(null);
   const [youtubeInput, setYoutubeInput] = useState('');
   const [playerState, setPlayerState] = useState<PlayerState>('idle');
   const [message, setMessage] = useState<string | null>(null);
@@ -224,12 +227,74 @@ export default function HomeScreen() {
     }
   }, [playerState]);
 
+  // Create a ref for the latest state so callbacks don't need to depend on them causing re-renders/loop
+  const stateRef = useRef({ playerState, idleTimeout });
+  useEffect(() => {
+    stateRef.current = { playerState, idleTimeout };
+  }, [playerState, idleTimeout]);
+
+  const startIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    const { playerState, idleTimeout } = stateRef.current;
+
+    if (idleTimeout > 0 && playerState === 'playing') {
+      idleTimerRef.current = setTimeout(() => {
+        isIdleShared.value = 1;
+      }, idleTimeout * 1000);
+    }
+  }, []);
+
+  const handleActivity = useCallback(() => {
+    if (isIdleShared.value === 1) {
+      isIdleShared.value = 0;
+    }
+    startIdleTimer();
+  }, [startIdleTimer, isIdleShared]);
+
+  // Restart timer when playback state or settings change
+  useEffect(() => {
+    startIdleTimer();
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, [playerState, idleTimeout, startIdleTimer]);
+
+  // Setup event listeners for Web
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+
+    // Throttle slightly if needed, but for now direct call is fine as it just clears/sets timeout
+    window.addEventListener('mousemove', handleActivity);
+    window.addEventListener('keydown', handleActivity);
+    window.addEventListener('touchstart', handleActivity);
+    window.addEventListener('click', handleActivity);
+
+    return () => {
+      window.removeEventListener('mousemove', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
+      window.removeEventListener('touchstart', handleActivity);
+      window.removeEventListener('click', handleActivity);
+    };
+  }, [handleActivity]);
+
+  useEffect(() => {
+    // On native, this effect is no longer primary. The BackHandler logic is tricky with shared values.
+    // For now, we just keep this for reference but don't use `isIdle` state.
+  }, []);
+
+  const animatedOpacityStyle = useAnimatedStyle(() => {
+    if (Platform.OS !== 'web') return { opacity: 1 };
+    return {
+      opacity: withTiming(isIdleShared.value === 1 ? 0 : 1, { duration: 500 }),
+    };
+  });
+
   const parsedVideoId = useMemo(() => extractVideoId(youtubeInput), [youtubeInput]);
 
   useEffect(() => {
     Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
-      staysActiveInBackground: false,
+      staysActiveInBackground: true,
       playsInSilentModeIOS: true,
       shouldDuckAndroid: true
     }).catch((error) => {
@@ -829,270 +894,237 @@ export default function HomeScreen() {
   const ScrollComponent = (Platform.OS === 'web' ? ScrollView : NestableScrollContainer) as React.ComponentType<any>;
 
   return (
-    <View style={{ flex: 1, backgroundColor: 'black' }}>
+    <View
+      style={{ flex: 1, backgroundColor: 'black' }}
+      onTouchStart={handleActivity}
+    >
       <AppBackground style={{ position: 'absolute', width: '100%', height: '100%' }} />
-      <View style={styles.container}>
-        <ScrollComponent style={{ flex: 1 }} contentContainerStyle={styles.content}>
-          <Text variant="headlineMedium" style={[styles.heading, { color: 'white' }]}>
-            Kingsley Player
-          </Text>
+      <Animated.View style={[{ flex: 1 }, animatedOpacityStyle]}>
+        <View style={styles.container}>
+          <ScrollComponent style={{ flex: 1 }} contentContainerStyle={styles.content}>
+            <Text variant="headlineMedium" style={[styles.heading, { color: 'white' }]}>
+              Kingsley Player
+            </Text>
 
-          <BlurView intensity={20} tint="dark" style={styles.glassCard}>
-            <View style={styles.cardContent}>
-              <TextInput
-                mode="outlined"
-                label="YouTube 链接或关键词"
-                placeholder="粘贴链接或输入歌曲名称/歌词"
-                value={youtubeInput}
-                onChangeText={(value) => {
-                  setYoutubeInput(value);
-                  if (!value.trim()) {
-                    setSearchError(null);
-                    setSearchResults([]);
-                  }
-                }}
-                onSubmitEditing={() => {
-                  if (!STREAM_BASE_URL || searchLoading) {
-                    return;
-                  }
-                  handlePrimaryAction();
-                }}
-                returnKeyType={parsedVideoId ? 'go' : 'search'}
-                style={styles.input}
-                textColor="white"
-                theme={{
-                  colors: {
-                    onSurfaceVariant: 'rgba(255, 255, 255, 0.7)',
-                    primary: 'white',
-                    background: '#1e1e28',
-                  },
-                }}
-                right={
-                  <TextInput.Icon
-                    icon={parsedVideoId ? 'play' : 'magnify'}
-                    onPress={() => {
-                      if (!STREAM_BASE_URL || searchLoading) {
-                        return;
-                      }
-                      handlePrimaryAction();
-                    }}
-                    disabled={!STREAM_BASE_URL || searchLoading}
-                    forceTextInputFocus={false}
-                  />
-                }
-              />
-              {parsedVideoId && (
-                <Text variant="bodySmall" style={{ color: theme.colors.primary }}>
-                  解析到的视频 ID：{parsedVideoId}
-                </Text>
-              )}
-              {searchError ? (
-                <Text variant="bodySmall" style={[styles.searchErrorText, { color: theme.colors.error }]}>
-                  {searchError}
-                </Text>
-              ) : null}
-              {searchResults.length > 0 && (
-                <View style={styles.searchResultsContainer}>
-                  {searchResults.map((result) => (
-                    <Pressable
-                      key={result.videoId}
-                      style={[styles.searchResultCard, { borderColor: theme.colors.surfaceVariant }]}
-                      onPress={() => handleSearchResultSelect(result)}
-                    >
-                      <Image
-                        source={
-                          result.thumbnailUrl
-                            ? { uri: result.thumbnailUrl }
-                            : require('@/assets/images/react-logo.png')
-                        }
-                        style={styles.searchThumbnail}
-                        contentFit="cover"
-                      />
-                      <View style={styles.searchInfo}>
-                        <Text variant="titleSmall" numberOfLines={1}>
-                          {result.title}
-                        </Text>
-                        <Text variant="bodySmall" numberOfLines={1}>
-                          {result.channelTitle ?? '未知频道'}
-                        </Text>
-                      </View>
-                      <Button mode="contained" onPress={() => handleSearchResultSelect(result)}>
-                        播放
-                      </Button>
-                    </Pressable>
-                  ))}
-                </View>
-              )}
-
-              <View style={styles.albumContainer}>
-                {playerState === 'loading' && (
-                  <Animated.View style={[styles.ripple, rippleStyle]} />
-                )}
-                {currentTrack && showBanner ? (
-                  currentTrack.thumbnailUrl ? (
-                    <Animated.Image
-                      source={{ uri: currentTrack.thumbnailUrl }}
-                      style={[styles.albumArt, animatedImageStyle]}
-                    />
-                  ) : (
-                    <View style={[styles.albumArt, { backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
-                  )
-                ) : (
-                  <View style={[styles.albumArt, { overflow: 'hidden', backgroundColor: 'black' }]}>
-                    <AppBackground style={{ width: '100%', height: '100%' }} />
-                  </View>
-                )}
-              </View>
-
-              <View style={styles.trackInfoContainer}>
-                <Text variant="titleMedium" numberOfLines={1} style={{ textAlign: 'center' }}>
-                  {currentTrack?.title || 'No Track Playing'}
-                </Text>
-                <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
-                  {currentTrack?.author || 'Unknown Artist'}
-                </Text>
-              </View>
-
-              <View style={styles.controls}>
-                <IconButton
-                  icon="play"
-                  mode="contained"
-                  containerColor={theme.colors.primary}
-                  iconColor={theme.colors.onPrimary}
-                  size={40}
-                  onPress={playerState === 'paused' ? handleResume : handlePlay}
-                  disabled={!parsedVideoId || playerState === 'loading'}
-                />
-                <IconButton
-                  icon="pause"
-                  mode="contained-tonal"
-                  size={32}
-                  onPress={handlePause}
-                  disabled={playerState !== 'playing'}
-                />
-                <IconButton
-                  icon="stop"
+            <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+              <View style={styles.cardContent}>
+                <TextInput
                   mode="outlined"
-                  size={32}
-                  onPress={stopPlayback}
-                  disabled={playerState === 'idle'}
-                />
-              </View>
-
-              <Text variant="labelSmall" style={{ textAlign: 'center', marginTop: 10 }}>
-                {PLAYER_STATE_COPY[playerState]}
-              </Text>
-
-              <View style={styles.sliderContainer}>
-                <Slider
-                  style={styles.slider}
-                  minimumValue={0}
-                  maximumValue={sliderMax}
-                  value={sliderValue}
-                  minimumTrackTintColor={theme.colors.primary}
-                  maximumTrackTintColor={theme.colors.surfaceVariant}
-                  thumbTintColor={theme.colors.primary}
-                  disabled={duration <= 0}
-                  onSlidingStart={(value) => {
-                    setIsSeeking(true);
-                    setSeekValue(value ?? 0);
-                  }}
-                  onValueChange={(value) => {
-                    if (!isSeeking) {
-                      setIsSeeking(true);
-                    }
-                    setSeekValue(value ?? 0);
-                  }}
-                  onSlidingComplete={async (value) => {
-                    const nextValue = value ?? 0;
-                    setIsSeeking(false);
-                    setSeekValue(nextValue);
-                    setPosition(nextValue);
-                    if (soundRef.current) {
-                      try {
-                        await soundRef.current.setPositionAsync(nextValue);
-                      } catch (error) {
-                        console.warn('Unable to seek playback', error);
-                      }
+                  label="YouTube 链接或关键词"
+                  placeholder="粘贴链接或输入歌曲名称/歌词"
+                  value={youtubeInput}
+                  onChangeText={(value) => {
+                    setYoutubeInput(value);
+                    if (!value.trim()) {
+                      setSearchError(null);
+                      setSearchResults([]);
                     }
                   }}
-                />
-                <View style={styles.timeRow}>
-                  <Text variant="labelSmall">{formatTime(displayedPosition)}</Text>
-                  <Text variant="labelSmall">{duration > 0 ? formatTime(duration) : '--:--'}</Text>
-                </View>
-              </View>
-
-              <View style={styles.loopRow}>
-                <Text style={{ color: theme.colors.onSurface }}>Single Loop</Text>
-                <Switch
-                  value={loopEnabled}
-                  onValueChange={handleLoopToggle}
-                  trackColor={{ false: '#767577', true: theme.colors.primary }}
-                  thumbColor={loopEnabled ? theme.colors.onPrimary : '#f4f3f4'}
-                />
-              </View>
-            </View>
-          </BlurView>
-
-          <BlurView intensity={20} tint="dark" style={styles.glassCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{`My Tracks (${tracks.length})`}</Text>
-              <IconButton icon="refresh" onPress={fetchTracks} iconColor={theme.colors.onSurface} />
-            </View>
-            <View style={styles.cardContent}>
-              {tracksLoading ? (
-                <PaperActivityIndicator />
-              ) : tracks.length === 0 ? (
-                <Text style={{ color: theme.colors.onSurfaceVariant }}>No cached tracks.</Text>
-              ) : (
-                Platform.OS === 'web' ? (
-                  <View style={{ height: 400 }}>
-                    <FlatList
-                      data={tracks}
-                      keyExtractor={(item) => item.videoId}
-                      renderItem={({ item }) => {
-                        const selected = selectedTrackIds.includes(item.videoId);
-                        const playing = currentTrackId === item.videoId;
-                        return (
-                          <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
-                            <Card.Content style={styles.trackItemContent}>
-                              <View style={{ flex: 1 }}>
-                                <Text variant="titleSmall" numberOfLines={1} style={{ color: 'white' }}>{item.title}</Text>
-                                <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
-                              </View>
-                              <View style={styles.trackActions}>
-                                <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
-                                <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(item.videoId)} />
-                                <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(item.videoId)} />
-                              </View>
-                            </Card.Content>
-                          </Card>
-                        );
+                  onSubmitEditing={() => {
+                    if (!STREAM_BASE_URL || searchLoading) {
+                      return;
+                    }
+                    handlePrimaryAction();
+                  }}
+                  returnKeyType={parsedVideoId ? 'go' : 'search'}
+                  style={styles.input}
+                  textColor="white"
+                  theme={{
+                    colors: {
+                      onSurfaceVariant: 'rgba(255, 255, 255, 0.7)',
+                      primary: 'white',
+                      background: '#1e1e28',
+                    },
+                  }}
+                  right={
+                    <TextInput.Icon
+                      icon={parsedVideoId ? 'play' : 'magnify'}
+                      onPress={() => {
+                        if (!STREAM_BASE_URL || searchLoading) {
+                          return;
+                        }
+                        handlePrimaryAction();
                       }}
+                      disabled={!STREAM_BASE_URL || searchLoading}
+                      forceTextInputFocus={false}
                     />
+                  }
+                />
+                {parsedVideoId && (
+                  <Text variant="bodySmall" style={{ color: theme.colors.primary }}>
+                    解析到的视频 ID：{parsedVideoId}
+                  </Text>
+                )}
+                {searchError ? (
+                  <Text variant="bodySmall" style={[styles.searchErrorText, { color: theme.colors.error }]}>
+                    {searchError}
+                  </Text>
+                ) : null}
+                {searchResults.length > 0 && (
+                  <View style={styles.searchResultsContainer}>
+                    {searchResults.map((result) => (
+                      <Pressable
+                        key={result.videoId}
+                        style={[styles.searchResultCard, { borderColor: theme.colors.surfaceVariant }]}
+                        onPress={() => handleSearchResultSelect(result)}
+                      >
+                        <Image
+                          source={
+                            result.thumbnailUrl
+                              ? { uri: result.thumbnailUrl }
+                              : require('@/assets/images/react-logo.png')
+                          }
+                          style={styles.searchThumbnail}
+                          contentFit="cover"
+                        />
+                        <View style={styles.searchInfo}>
+                          <Text variant="titleSmall" numberOfLines={1}>
+                            {result.title}
+                          </Text>
+                          <Text variant="bodySmall" numberOfLines={1}>
+                            {result.channelTitle ?? '未知频道'}
+                          </Text>
+                        </View>
+                        <Button mode="contained" onPress={() => handleSearchResultSelect(result)}>
+                          播放
+                        </Button>
+                      </Pressable>
+                    ))}
                   </View>
-                ) : (
-                  <NestableDraggableFlatList
-                    data={tracks}
-                    style={{ maxHeight: 600 }}
-                    onDragEnd={async ({ data }) => {
-                      setTracks(data);
-                      try {
-                        const order = data.map(t => t.videoId);
-                        await AsyncStorage.setItem(TRACK_ORDER_KEY, JSON.stringify(order));
-                      } catch (e) {
-                        console.warn('Failed to save track order', e);
+                )}
+
+                <View style={styles.albumContainer}>
+                  {playerState === 'loading' && (
+                    <Animated.View style={[styles.ripple, rippleStyle]} />
+                  )}
+                  {currentTrack && showBanner ? (
+                    currentTrack.thumbnailUrl ? (
+                      <Animated.Image
+                        source={{ uri: currentTrack.thumbnailUrl }}
+                        style={[styles.albumArt, animatedImageStyle]}
+                      />
+                    ) : (
+                      <View style={[styles.albumArt, { backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
+                    )
+                  ) : (
+                    <View style={[styles.albumArt, { overflow: 'hidden', backgroundColor: 'black' }]}>
+                      <AppBackground style={{ width: '100%', height: '100%' }} />
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.trackInfoContainer}>
+                  <Text variant="titleMedium" numberOfLines={1} style={{ textAlign: 'center' }}>
+                    {currentTrack?.title || 'No Track Playing'}
+                  </Text>
+                  <Text variant="bodySmall" style={{ color: theme.colors.onSurfaceVariant }}>
+                    {currentTrack?.author || 'Unknown Artist'}
+                  </Text>
+                </View>
+
+                <View style={styles.controls}>
+                  <IconButton
+                    icon="play"
+                    mode="contained"
+                    containerColor={theme.colors.primary}
+                    iconColor={theme.colors.onPrimary}
+                    size={40}
+                    onPress={playerState === 'paused' ? handleResume : handlePlay}
+                    disabled={!parsedVideoId || playerState === 'loading'}
+                  />
+                  <IconButton
+                    icon="pause"
+                    mode="contained-tonal"
+                    size={32}
+                    onPress={handlePause}
+                    disabled={playerState !== 'playing'}
+                  />
+                  <IconButton
+                    icon="stop"
+                    mode="outlined"
+                    size={32}
+                    onPress={stopPlayback}
+                    disabled={playerState === 'idle'}
+                  />
+                </View>
+
+                <Text variant="labelSmall" style={{ textAlign: 'center', marginTop: 10 }}>
+                  {PLAYER_STATE_COPY[playerState]}
+                </Text>
+
+                <View style={styles.sliderContainer}>
+                  <Slider
+                    style={styles.slider}
+                    minimumValue={0}
+                    maximumValue={sliderMax}
+                    value={sliderValue}
+                    minimumTrackTintColor={theme.colors.primary}
+                    maximumTrackTintColor={theme.colors.surfaceVariant}
+                    thumbTintColor={theme.colors.primary}
+                    disabled={duration <= 0}
+                    onSlidingStart={(value) => {
+                      setIsSeeking(true);
+                      setSeekValue(value ?? 0);
+                    }}
+                    onValueChange={(value) => {
+                      if (!isSeeking) {
+                        setIsSeeking(true);
+                      }
+                      setSeekValue(value ?? 0);
+                    }}
+                    onSlidingComplete={async (value) => {
+                      const nextValue = value ?? 0;
+                      setIsSeeking(false);
+                      setSeekValue(nextValue);
+                      setPosition(nextValue);
+                      if (soundRef.current) {
+                        try {
+                          await soundRef.current.setPositionAsync(nextValue);
+                        } catch (error) {
+                          console.warn('Unable to seek playback', error);
+                        }
                       }
                     }}
-                    keyExtractor={(item) => item.videoId}
-                    renderItem={({ item, drag, isActive }: RenderItemParams<TrackMetadata>) => {
-                      const selected = selectedTrackIds.includes(item.videoId);
-                      const playing = currentTrackId === item.videoId;
-                      return (
-                        <ScaleDecorator>
-                          <Pressable onLongPress={drag} disabled={isActive} delayLongPress={200}>
-                            <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }, isActive && { opacity: 0.7, backgroundColor: 'rgba(255,255,255,0.1)' }]}>
+                  />
+                  <View style={styles.timeRow}>
+                    <Text variant="labelSmall">{formatTime(displayedPosition)}</Text>
+                    <Text variant="labelSmall">{duration > 0 ? formatTime(duration) : '--:--'}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.loopRow}>
+                  <Text style={{ color: theme.colors.onSurface }}>Single Loop</Text>
+                  <Switch
+                    value={loopEnabled}
+                    onValueChange={handleLoopToggle}
+                    trackColor={{ false: '#767577', true: theme.colors.primary }}
+                    thumbColor={loopEnabled ? theme.colors.onPrimary : '#f4f3f4'}
+                  />
+                </View>
+              </View>
+            </BlurView>
+
+            <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{`My Tracks (${tracks.length})`}</Text>
+                <IconButton icon="refresh" onPress={fetchTracks} iconColor={theme.colors.onSurface} />
+              </View>
+              <View style={styles.cardContent}>
+                {tracksLoading ? (
+                  <PaperActivityIndicator />
+                ) : tracks.length === 0 ? (
+                  <Text style={{ color: theme.colors.onSurfaceVariant }}>No cached tracks.</Text>
+                ) : (
+                  Platform.OS === 'web' ? (
+                    <View style={{ height: 400 }}>
+                      <FlatList
+                        data={tracks}
+                        keyExtractor={(item) => item.videoId}
+                        renderItem={({ item }) => {
+                          const selected = selectedTrackIds.includes(item.videoId);
+                          const playing = currentTrackId === item.videoId;
+                          return (
+                            <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
                               <Card.Content style={styles.trackItemContent}>
                                 <View style={{ flex: 1 }}>
                                   <Text variant="titleSmall" numberOfLines={1} style={{ color: 'white' }}>{item.title}</Text>
@@ -1102,107 +1134,145 @@ export default function HomeScreen() {
                                   <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
                                   <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(item.videoId)} />
                                   <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(item.videoId)} />
-                                  <Pressable onLongPress={drag} delayLongPress={0} disabled={isActive} hitSlop={20} style={{ padding: 8 }}>
-                                    <MaterialCommunityIcons name="drag" size={24} color="rgba(255,255,255,0.5)" />
-                                  </Pressable>
                                 </View>
                               </Card.Content>
                             </Card>
-                          </Pressable>
-                        </ScaleDecorator>
-                      );
-                    }}
-                  />
-                )
-              )}
-              <Text style={styles.hint}>Selected: {selectedTrackIds.length}</Text>
-            </View>
-          </BlurView>
-
-          <BlurView intensity={20} tint="dark" style={styles.glassCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Create Group</Text>
-            </View>
-            <View style={styles.cardContent}>
-              <TextInput
-                mode="outlined"
-                label="Group Name"
-                value={newGroupName}
-                onChangeText={setNewGroupName}
-                style={styles.input}
-                textColor="white"
-                theme={{
-                  colors: {
-                    onSurfaceVariant: 'rgba(255, 255, 255, 0.7)',
-                    primary: 'white',
-                    background: '#1e1e28',
-                  },
-                }}
-              />
-              <Button
-                mode="contained"
-                onPress={handleCreateGroup}
-                disabled={!newGroupName.trim() || !selectedTrackIds.length}
-                style={{ marginTop: 10 }}
-              >
-                Create Group
-              </Button>
-            </View>
-          </BlurView>
-
-          <BlurView intensity={20} tint="dark" style={styles.glassCard}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{`My Groups (${groups.length})`}</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Text variant="labelMedium" style={{ color: theme.colors.onSurface }}>Loop</Text>
-                <Switch
-                  value={groupLoopEnabled}
-                  onValueChange={setGroupLoopEnabled}
-                  trackColor={{ false: '#767577', true: theme.colors.primary }}
-                  thumbColor={groupLoopEnabled ? theme.colors.onPrimary : '#f4f3f4'}
-                />
-              </View>
-            </View>
-            <View style={styles.cardContent}>
-              <View style={styles.loopRow}>
-                {/* Loop toggle moved to header, keeping this empty or removing if not needed, but keeping structure for now if other content exists */}
-              </View>
-              <ScrollView style={{ maxHeight: 450 }} nestedScrollEnabled>
-                {groupsLoading ? (
-                  <PaperActivityIndicator />
-                ) : (
-                  groups.map((group) => (
-                    <Card key={group.id} mode="contained" style={[styles.groupItem, activeGroupId === group.id && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
-                      <Card.Content style={styles.groupItemContent}>
-                        <View style={{ flex: 1 }}>
-                          <Text variant="titleSmall" style={{ color: 'white' }}>{group.name}</Text>
-                          <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{group.trackIds.length} tracks</Text>
-                        </View>
-                        <View style={styles.trackActions}>
-                          <IconButton icon="play" iconColor="white" onPress={() => handleGroupPlayback(group.id)} />
-                          <IconButton icon="playlist-edit" iconColor="white" onPress={() => setViewingGroup(group)} />
-                          <IconButton icon="delete" iconColor="white" onPress={() => handleDeleteGroup(group.id)} />
-                        </View>
-                      </Card.Content>
-                    </Card>
-                  ))
+                          );
+                        }}
+                      />
+                    </View>
+                  ) : (
+                    <NestableDraggableFlatList
+                      data={tracks}
+                      style={{ maxHeight: 600 }}
+                      onDragEnd={async ({ data }) => {
+                        setTracks(data);
+                        try {
+                          const order = data.map(t => t.videoId);
+                          await AsyncStorage.setItem(TRACK_ORDER_KEY, JSON.stringify(order));
+                        } catch (e) {
+                          console.warn('Failed to save track order', e);
+                        }
+                      }}
+                      keyExtractor={(item) => item.videoId}
+                      renderItem={({ item, drag, isActive }: RenderItemParams<TrackMetadata>) => {
+                        const selected = selectedTrackIds.includes(item.videoId);
+                        const playing = currentTrackId === item.videoId;
+                        return (
+                          <ScaleDecorator>
+                            <Pressable onLongPress={drag} disabled={isActive} delayLongPress={200}>
+                              <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }, isActive && { opacity: 0.7, backgroundColor: 'rgba(255,255,255,0.1)' }]}>
+                                <Card.Content style={styles.trackItemContent}>
+                                  <View style={{ flex: 1 }}>
+                                    <Text variant="titleSmall" numberOfLines={1} style={{ color: 'white' }}>{item.title}</Text>
+                                    <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
+                                  </View>
+                                  <View style={styles.trackActions}>
+                                    <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
+                                    <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(item.videoId)} />
+                                    <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(item.videoId)} />
+                                    <Pressable onLongPress={drag} delayLongPress={0} disabled={isActive} hitSlop={20} style={{ padding: 8 }}>
+                                      <MaterialCommunityIcons name="drag" size={24} color="rgba(255,255,255,0.5)" />
+                                    </Pressable>
+                                  </View>
+                                </Card.Content>
+                              </Card>
+                            </Pressable>
+                          </ScaleDecorator>
+                        );
+                      }}
+                    />
+                  )
                 )}
-              </ScrollView>
-            </View>
-          </BlurView>
-        </ScrollComponent>
-      </View >
-      <GroupDetailModal
-        visible={!!viewingGroup}
-        onDismiss={() => setViewingGroup(null)}
-        group={viewingGroup}
-        allTracks={tracks}
-        onUpdateGroup={handleUpdateGroup}
-        onPlayGroup={(groupId) => {
-          handleGroupPlayback(groupId);
-          setViewingGroup(null);
-        }}
-      />
+                <Text style={styles.hint}>Selected: {selectedTrackIds.length}</Text>
+              </View>
+            </BlurView>
+
+            <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>Create Group</Text>
+              </View>
+              <View style={styles.cardContent}>
+                <TextInput
+                  mode="outlined"
+                  label="Group Name"
+                  value={newGroupName}
+                  onChangeText={setNewGroupName}
+                  style={styles.input}
+                  textColor="white"
+                  theme={{
+                    colors: {
+                      onSurfaceVariant: 'rgba(255, 255, 255, 0.7)',
+                      primary: 'white',
+                      background: '#1e1e28',
+                    },
+                  }}
+                />
+                <Button
+                  mode="contained"
+                  onPress={handleCreateGroup}
+                  disabled={!newGroupName.trim() || !selectedTrackIds.length}
+                  style={{ marginTop: 10 }}
+                >
+                  Create Group
+                </Button>
+              </View>
+            </BlurView>
+
+            <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{`My Groups (${groups.length})`}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text variant="labelMedium" style={{ color: theme.colors.onSurface }}>Loop</Text>
+                  <Switch
+                    value={groupLoopEnabled}
+                    onValueChange={setGroupLoopEnabled}
+                    trackColor={{ false: '#767577', true: theme.colors.primary }}
+                    thumbColor={groupLoopEnabled ? theme.colors.onPrimary : '#f4f3f4'}
+                  />
+                </View>
+              </View>
+              <View style={styles.cardContent}>
+                <View style={styles.loopRow}>
+                  {/* Loop toggle moved to header, keeping this empty or removing if not needed, but keeping structure for now if other content exists */}
+                </View>
+                <ScrollView style={{ maxHeight: 450 }} nestedScrollEnabled>
+                  {groupsLoading ? (
+                    <PaperActivityIndicator />
+                  ) : (
+                    groups.map((group) => (
+                      <Card key={group.id} mode="contained" style={[styles.groupItem, activeGroupId === group.id && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
+                        <Card.Content style={styles.groupItemContent}>
+                          <View style={{ flex: 1 }}>
+                            <Text variant="titleSmall" style={{ color: 'white' }}>{group.name}</Text>
+                            <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{group.trackIds.length} tracks</Text>
+                          </View>
+                          <View style={styles.trackActions}>
+                            <IconButton icon="play" iconColor="white" onPress={() => handleGroupPlayback(group.id)} />
+                            <IconButton icon="playlist-edit" iconColor="white" onPress={() => setViewingGroup(group)} />
+                            <IconButton icon="delete" iconColor="white" onPress={() => handleDeleteGroup(group.id)} />
+                          </View>
+                        </Card.Content>
+                      </Card>
+                    ))
+                  )}
+                </ScrollView>
+              </View>
+            </BlurView>
+          </ScrollComponent>
+        </View >
+        <GroupDetailModal
+          visible={!!viewingGroup}
+          onDismiss={() => setViewingGroup(null)}
+          group={viewingGroup}
+          allTracks={tracks}
+          onUpdateGroup={handleUpdateGroup}
+          onPlayGroup={(groupId) => {
+            handleGroupPlayback(groupId);
+            setViewingGroup(null);
+          }}
+        />
+      </Animated.View>
     </View >
   );
 }
