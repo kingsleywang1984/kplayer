@@ -1,20 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Keyboard,
   Pressable,
   ScrollView,
   StyleSheet,
   Switch,
-  Text,
-  TextInput,
   View,
+  Platform,
+  FlatList,
+  BackHandler,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Audio, AVPlaybackStatus } from 'expo-av';
 import axios from 'axios';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Image } from 'expo-image';
+import { IconButton, Text, Button, Card, useTheme, ActivityIndicator as PaperActivityIndicator, TextInput } from 'react-native-paper';
+import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, Easing, withRepeat } from 'react-native-reanimated';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { NestableDraggableFlatList, NestableScrollContainer, ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { useSettings } from '@/context/settings-context';
+import { TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
+const KEEP_ALIVE_INTERVAL_MS = 10 * 60 * 1000;
+const TRACK_ORDER_KEY = 'kplayer_track_order';
 
 type PlayerState = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
 
@@ -39,6 +51,15 @@ type GroupMetadata = {
 
 type PlaybackOptions = {
   fromQueue?: boolean;
+};
+
+type YouTubeSearchResult = {
+  videoId: string;
+  title: string;
+  channelTitle?: string | null;
+  description?: string | null;
+  thumbnailUrl?: string | null;
+  publishedAt?: string | null;
 };
 
 const PLAYER_STATE_COPY: Record<PlayerState, string> = {
@@ -94,8 +115,15 @@ const extractVideoId = (input: string): string | null => {
   return null;
 };
 
+import { AppBackground } from '@/components/AppBackground';
+import { BlurView } from 'expo-blur';
+import { GroupDetailModal } from '@/components/GroupDetailModal';
+
 export default function HomeScreen() {
-  const [youtubeLink, setYoutubeLink] = useState('');
+  const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout } = useSettings();
+  const isIdleShared = useSharedValue(0); // 0 = not idle, 1 = idle
+  const idleTimerRef = useRef<any>(null);
+  const [youtubeInput, setYoutubeInput] = useState('');
   const [playerState, setPlayerState] = useState<PlayerState>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
@@ -113,6 +141,9 @@ export default function HomeScreen() {
   const [currentTrackId, setCurrentTrackId] = useState<string | null>(null);
   const [isSeeking, setIsSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
+  const [searchResults, setSearchResults] = useState<YouTubeSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const queueStateRef = useRef<{ queue: string[]; loop: boolean; index: number; groupId: string | null }>({
     queue: [],
@@ -122,12 +153,149 @@ export default function HomeScreen() {
   });
   const initiatePlaybackRef = useRef<((videoId: string, options?: PlaybackOptions) => Promise<void>) | null>(null);
 
-  const parsedVideoId = useMemo(() => extractVideoId(youtubeLink), [youtubeLink]);
+  const [viewingGroup, setViewingGroup] = useState<GroupMetadata | null>(null);
+
+  const autoPlayLibraryTrack = useCallback(
+    (previousVideoId?: string | null) => {
+      if (loopEnabled || queueStateRef.current.queue.length) {
+        return false;
+      }
+
+      if (!tracks.length) {
+        return false;
+      }
+
+      const currentIndex = previousVideoId
+        ? tracks.findIndex((track) => track.videoId === previousVideoId)
+        : -1;
+      const nextIndex = (currentIndex + 1) % tracks.length;
+      const nextTrack = tracks[nextIndex];
+      if (!nextTrack) {
+        return false;
+      }
+
+      const initiator = initiatePlaybackRef.current;
+      if (!initiator) {
+        return false;
+      }
+
+      initiator(nextTrack.videoId).catch((error) =>
+        console.warn('Auto library playback failed', error)
+      );
+      return true;
+    },
+    [loopEnabled, tracks]
+  );
+
+  const theme = useTheme();
+  const scale = useSharedValue(0.8);
+  const rippleOpacity = useSharedValue(0);
+  const rippleScale = useSharedValue(1);
+
+  const animatedImageStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ scale: scale.value }],
+    };
+  });
+
+  const rippleStyle = useAnimatedStyle(() => {
+    return {
+      opacity: rippleOpacity.value,
+      transform: [{ scale: rippleScale.value }],
+    };
+  });
+
+  useEffect(() => {
+    if (playerState === 'playing') {
+      scale.value = withSpring(1, { damping: 10, stiffness: 100 });
+      rippleOpacity.value = withTiming(0);
+    } else if (playerState === 'loading') {
+      scale.value = withTiming(0.9, { duration: 500, easing: Easing.inOut(Easing.quad) });
+      rippleOpacity.value = 1;
+      rippleScale.value = withRepeat(
+        withTiming(1.5, { duration: 1500, easing: Easing.out(Easing.quad) }),
+        -1,
+        false
+      );
+      rippleOpacity.value = withRepeat(
+        withTiming(0, { duration: 1500, easing: Easing.out(Easing.quad) }),
+        -1,
+        false
+      );
+    } else {
+      scale.value = withTiming(0.8, { duration: 300, easing: Easing.out(Easing.quad) });
+      rippleOpacity.value = withTiming(0);
+    }
+  }, [playerState]);
+
+  // Create a ref for the latest state so callbacks don't need to depend on them causing re-renders/loop
+  const stateRef = useRef({ playerState, idleTimeout });
+  useEffect(() => {
+    stateRef.current = { playerState, idleTimeout };
+  }, [playerState, idleTimeout]);
+
+  const startIdleTimer = useCallback(() => {
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    const { playerState, idleTimeout } = stateRef.current;
+
+    if (idleTimeout > 0 && playerState === 'playing') {
+      idleTimerRef.current = setTimeout(() => {
+        isIdleShared.value = 1;
+      }, idleTimeout * 1000);
+    }
+  }, []);
+
+  const handleActivity = useCallback(() => {
+    if (isIdleShared.value === 1) {
+      isIdleShared.value = 0;
+    }
+    startIdleTimer();
+  }, [startIdleTimer, isIdleShared]);
+
+  // Restart timer when playback state or settings change
+  useEffect(() => {
+    startIdleTimer();
+    return () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    };
+  }, [playerState, idleTimeout, startIdleTimer]);
+
+  // Setup event listeners for Web
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+
+    // Throttle slightly if needed, but for now direct call is fine as it just clears/sets timeout
+    window.addEventListener('mousemove', handleActivity);
+    window.addEventListener('keydown', handleActivity);
+    window.addEventListener('touchstart', handleActivity);
+    window.addEventListener('click', handleActivity);
+
+    return () => {
+      window.removeEventListener('mousemove', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
+      window.removeEventListener('touchstart', handleActivity);
+      window.removeEventListener('click', handleActivity);
+    };
+  }, [handleActivity]);
+
+  useEffect(() => {
+    // On native, this effect is no longer primary. The BackHandler logic is tricky with shared values.
+    // For now, we just keep this for reference but don't use `isIdle` state.
+  }, []);
+
+  const animatedOpacityStyle = useAnimatedStyle(() => {
+    if (Platform.OS !== 'web') return { opacity: 1 };
+    return {
+      opacity: withTiming(isIdleShared.value === 1 ? 0 : 1, { duration: 500 }),
+    };
+  });
+
+  const parsedVideoId = useMemo(() => extractVideoId(youtubeInput), [youtubeInput]);
 
   useEffect(() => {
     Audio.setAudioModeAsync({
       allowsRecordingIOS: false,
-      staysActiveInBackground: false,
+      staysActiveInBackground: true,
       playsInSilentModeIOS: true,
       shouldDuckAndroid: true
     }).catch((error) => {
@@ -178,7 +346,31 @@ export default function HomeScreen() {
     setTracksLoading(true);
     try {
       const response = await axios.get(`${STREAM_BASE_URL}/tracks`);
-      setTracks(response.data?.tracks ?? []);
+      const fetchedTracks: TrackMetadata[] = response.data?.tracks ?? [];
+
+      const savedOrderString = await AsyncStorage.getItem(TRACK_ORDER_KEY);
+      if (savedOrderString) {
+        try {
+          const savedOrder: string[] = JSON.parse(savedOrderString);
+          const orderedTracks: TrackMetadata[] = [];
+          const remainingTracks = [...fetchedTracks];
+
+          savedOrder.forEach(id => {
+            const index = remainingTracks.findIndex(t => t.videoId === id);
+            if (index !== -1) {
+              orderedTracks.push(remainingTracks[index]);
+              remainingTracks.splice(index, 1);
+            }
+          });
+
+          setTracks([...orderedTracks, ...remainingTracks]);
+        } catch (e) {
+          console.warn('Failed to parse saved track order', e);
+          setTracks(fetchedTracks);
+        }
+      } else {
+        setTracks(fetchedTracks);
+      }
     } catch (error) {
       console.warn('Failed to fetch track metadata', error);
     } finally {
@@ -209,6 +401,10 @@ export default function HomeScreen() {
   }, [gatewayStatus, fetchTracks, fetchGroups]);
 
   useEffect(() => {
+    if (!autoRefreshEnabled) {
+      return;
+    }
+
     const refreshAll = () => {
       if (gatewayStatus === 'online') {
         fetchTracks();
@@ -219,7 +415,23 @@ export default function HomeScreen() {
     refreshAll();
     const interval = setInterval(refreshAll, 30000);
     return () => clearInterval(interval);
-  }, [gatewayStatus, fetchTracks, fetchGroups]);
+  }, [gatewayStatus, fetchTracks, fetchGroups, autoRefreshEnabled]);
+
+  useEffect(() => {
+    if (!STREAM_BASE_URL || !keepAliveEnabled) {
+      return;
+    }
+
+    const pingHealth = () => {
+      axios
+        .get(`${STREAM_BASE_URL}/healthz`, { timeout: 4000 })
+        .catch((error) => console.warn('Keep-alive ping failed', error));
+    };
+
+    pingHealth();
+    const keepAliveInterval = setInterval(pingHealth, KEEP_ALIVE_INTERVAL_MS);
+    return () => clearInterval(keepAliveInterval);
+  }, [STREAM_BASE_URL, keepAliveEnabled]);
 
   useEffect(() => {
     if (!isSeeking) {
@@ -408,6 +620,10 @@ export default function HomeScreen() {
                 playNextInQueue();
                 return;
               }
+              const handled = autoPlayLibraryTrack(videoId);
+              if (handled) {
+                return;
+              }
               setPlayerState('idle');
               setMessage('播放完成');
               setPosition(0);
@@ -431,7 +647,16 @@ export default function HomeScreen() {
         setMessage('播放失败，请稍后重试。');
       }
     },
-    [STREAM_BASE_URL, loopEnabled, stopPlayback, unloadCurrentSound, clearQueue, playNextInQueue, tracks]
+    [
+      STREAM_BASE_URL,
+      loopEnabled,
+      stopPlayback,
+      unloadCurrentSound,
+      clearQueue,
+      playNextInQueue,
+      tracks,
+      autoPlayLibraryTrack,
+    ]
   );
 
   useEffect(() => {
@@ -517,12 +742,99 @@ export default function HomeScreen() {
     [fetchGroups, stopPlayback]
   );
 
+  const handleUpdateGroup = useCallback(async (groupId: string, name: string, trackIds: string[]) => {
+    if (!STREAM_BASE_URL) {
+      setMessage('Backend not configured');
+      return;
+    }
+    try {
+      await axios.put(`${STREAM_BASE_URL}/groups/${groupId}`, {
+        name,
+        trackIds
+      });
+      fetchGroups();
+      // Update the currently viewing group to reflect changes immediately in UI if needed,
+      // but fetchGroups should handle it. However, fetchGroups is async.
+      // We can also optimize by updating the local state.
+      setViewingGroup(prev => prev ? { ...prev, trackIds } : null);
+    } catch (error) {
+      console.error('Failed to update group', error);
+      setMessage('Failed to update group');
+    }
+  }, [fetchGroups]);
+
   const handleTrackPlay = useCallback(
     async (videoId: string) => {
-      setYoutubeLink(videoId);
+      setYoutubeInput(`https://www.youtube.com/watch?v=${videoId}`);
       await initiatePlayback(videoId);
     },
     [initiatePlayback]
+  );
+
+  const handleSearch = useCallback(async (query: string) => {
+    if (!STREAM_BASE_URL) {
+      setMessage('未设置后端地址，无法搜索 YouTube');
+      return;
+    }
+
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setSearchError('请输入要搜索的歌曲名称或歌词');
+      return;
+    }
+
+    setSearchLoading(true);
+    setSearchError(null);
+
+    try {
+      const response = await axios.get(`${STREAM_BASE_URL}/search`, {
+        params: { q: trimmed },
+      });
+      const results = response.data?.results ?? [];
+      setSearchResults(results);
+      if (!results.length) {
+        setSearchError('未找到匹配的歌曲');
+      }
+    } catch (error) {
+      console.error('搜索 YouTube 失败', error);
+      setSearchError('搜索失败，请稍后再试');
+    } finally {
+      setSearchLoading(false);
+    }
+  }, [STREAM_BASE_URL]);
+
+  const handlePrimaryAction = useCallback(async () => {
+    const trimmed = youtubeInput.trim();
+    if (!trimmed) {
+      setMessage('请输入 YouTube 链接或搜索内容');
+      return;
+    }
+
+    if (parsedVideoId) {
+      await initiatePlayback(parsedVideoId);
+      return;
+    }
+
+    await handleSearch(trimmed);
+  }, [youtubeInput, parsedVideoId, initiatePlayback, handleSearch]);
+
+  const handleSearchResultSelect = useCallback(
+    async (result: YouTubeSearchResult) => {
+      if (soundRef.current) {
+        await stopPlayback();
+      }
+
+      try {
+        await initiatePlayback(result.videoId);
+        setMessage(`正在播放：${result.title}`);
+        setYoutubeInput(`https://www.youtube.com/watch?v=${result.videoId}`);
+        setSearchResults([]);
+        setSearchError(null);
+      } catch (error) {
+        console.error('Unable to play selected search result', error);
+      }
+    },
+    [initiatePlayback, stopPlayback]
   );
 
   const handleDeleteTrack = useCallback(
@@ -578,395 +890,604 @@ export default function HomeScreen() {
   const displayedPosition = isSeeking ? seekValue : position;
   const sliderValue = duration > 0 ? Math.min(displayedPosition, sliderMax) : 0;
 
+  const currentTrack = tracks.find((t) => t.videoId === currentTrackId);
+
+  const ScrollComponent = (Platform.OS === 'web' ? ScrollView : NestableScrollContainer) as React.ComponentType<any>;
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.heading}>YouTube Audio Streamer</Text>
-      <Text style={styles.subtitle}>输入链接或从缓存列表选择歌曲，立即播放智能缓存音频。</Text>
+    <View
+      style={{ flex: 1, backgroundColor: 'black' }}
+      onTouchStart={handleActivity}
+    >
+      <AppBackground style={{ position: 'absolute', width: '100%', height: '100%' }} />
+      <Animated.View style={[{ flex: 1 }, animatedOpacityStyle]}>
+        <View style={styles.container}>
+          <ScrollComponent style={{ flex: 1 }} contentContainerStyle={styles.content}>
+            <Text variant="headlineMedium" style={[styles.heading, { color: TextColors.primary }]}>
+              Kingsley Player
+            </Text>
 
-      <View style={styles.section}>
-        <View style={styles.statusRow}>
-          <View style={[styles.statusDot, gatewayStatus === 'online' ? styles.online : styles.offline]} />
-          <Text style={styles.statusText}>
-            {gatewayStatus === 'checking'
-              ? '正在检查服务状态...'
-              : gatewayStatus === 'online'
-              ? '中间层在线'
-              : '无法连接到中间层'}
-          </Text>
-        </View>
+            <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+              <View style={styles.cardContent}>
+                <TextInput
+                  mode="outlined"
+                  label="YouTube 链接或关键词"
+                  placeholder="粘贴链接或输入歌曲名称/歌词"
+                  value={youtubeInput}
+                  onChangeText={(value) => {
+                    setYoutubeInput(value);
+                    if (!value.trim()) {
+                      setSearchError(null);
+                      setSearchResults([]);
+                    }
+                  }}
+                  onSubmitEditing={() => {
+                    if (!STREAM_BASE_URL || searchLoading) {
+                      return;
+                    }
+                    handlePrimaryAction();
+                  }}
+                  returnKeyType={parsedVideoId ? 'go' : 'search'}
+                  style={styles.input}
+                  textColor="white"
+                  theme={{
+                    colors: {
+                      onSurfaceVariant: 'rgba(255, 255, 255, 0.7)',
+                      primary: 'white',
+                      background: '#1e1e28',
+                    },
+                  }}
+                  right={
+                    <TextInput.Icon
+                      icon={parsedVideoId ? 'play' : 'magnify'}
+                      onPress={() => {
+                        if (!STREAM_BASE_URL || searchLoading) {
+                          return;
+                        }
+                        handlePrimaryAction();
+                      }}
+                      disabled={!STREAM_BASE_URL || searchLoading}
+                      forceTextInputFocus={false}
+                    />
+                  }
+                />
 
-        {!STREAM_BASE_URL && (
-          <Text style={styles.warning}>请在 .env 文件中设置 EXPO_PUBLIC_STREAM_BASE_URL。</Text>
-        )}
-
-        <TextInput
-          accessibilityRole="search"
-          autoCapitalize="none"
-          autoCorrect={false}
-          style={styles.input}
-          placeholder="粘贴 YouTube 链接"
-          placeholderTextColor="#9aa0a6"
-          value={youtubeLink}
-          onChangeText={setYoutubeLink}
-        />
-        <Text style={styles.hint}>解析的视频 ID：{parsedVideoId ?? '未解析'}</Text>
-
-        <View style={styles.actions}>
-          <Pressable
-            accessibilityRole="button"
-            style={[styles.button, (!parsedVideoId || playerState === 'loading') ? styles.buttonDisabled : null]}
-            disabled={!parsedVideoId || playerState === 'loading'}
-            onPress={playerState === 'paused' ? handleResume : handlePlay}>
-            <Text style={styles.buttonText}>{playerState === 'paused' ? '继续播放' : '播放'}</Text>
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            style={[styles.button, playerState !== 'playing' ? styles.buttonDisabled : null]}
-            disabled={playerState !== 'playing'}
-            onPress={handlePause}>
-            <Text style={styles.buttonText}>暂停</Text>
-          </Pressable>
-
-          <Pressable
-            accessibilityRole="button"
-            style={[styles.button, playerState === 'idle' ? styles.buttonDisabled : null]}
-            disabled={playerState === 'idle'}
-            onPress={stopPlayback}>
-            <Text style={styles.buttonText}>停止</Text>
-          </Pressable>
-        </View>
-
-        <Text style={styles.hint}>播放状态：{PLAYER_STATE_COPY[playerState]}</Text>
-
-        <View>
-          <Slider
-            key={currentTrackId ?? 'no-track'}
-            style={styles.slider}
-            minimumValue={0}
-            maximumValue={sliderMax}
-            value={sliderValue}
-            minimumTrackTintColor="#1a73e8"
-            maximumTrackTintColor="#2c2d30"
-            thumbTintColor="#f1f3f4"
-            disabled={duration <= 0}
-            onSlidingStart={(value) => {
-              setIsSeeking(true);
-              setSeekValue(value ?? 0);
-            }}
-            onValueChange={(value) => {
-              if (!isSeeking) {
-                setIsSeeking(true);
-              }
-              setSeekValue(value ?? 0);
-            }}
-            onSlidingComplete={async (value) => {
-              const nextValue = value ?? 0;
-              setIsSeeking(false);
-              setSeekValue(nextValue);
-              setPosition(nextValue);
-              if (soundRef.current) {
-                try {
-                  await soundRef.current.setPositionAsync(nextValue);
-                } catch (error) {
-                  console.warn('Unable to seek playback', error);
-                }
-              }
-            }}
-          />
-          <Text style={styles.progressLabel}>
-            {formatTime(displayedPosition)} / {duration > 0 ? formatTime(duration) : '--:--'}
-          </Text>
-        </View>
-
-        <View style={styles.loopRow}>
-          <Text style={styles.statusText}>单曲循环</Text>
-          <Switch
-            value={loopEnabled}
-            onValueChange={handleLoopToggle}
-            trackColor={{ false: '#3c4043', true: '#1a73e8' }}
-            thumbColor="#f1f3f4"
-          />
-        </View>
-      </View>
-
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>已缓存曲目 ({tracks.length})</Text>
-          <Pressable style={styles.smallButton} onPress={fetchTracks}>
-            <Text style={styles.smallButtonText}>刷新</Text>
-          </Pressable>
-        </View>
-
-        {tracksLoading ? (
-          <ActivityIndicator color="#4285f4" style={styles.loader} />
-        ) : tracks.length === 0 ? (
-          <Text style={styles.hint}>尚未缓存歌曲，播放任意链接后会自动缓存到 R2。</Text>
-        ) : (
-          tracks.map((track) => {
-            const selected = selectedTrackIds.includes(track.videoId);
-            const playing = currentTrackId === track.videoId;
-            return (
-              <View key={track.videoId} style={[styles.trackCard, playing ? styles.trackCardActive : null]}>
-                <View style={styles.trackInfo}>
-                  <Text style={styles.trackTitle}>{track.title}</Text>
-                  <Text style={styles.trackMeta}>
-                    {track.author ?? '未知艺人'} · {formatDuration(track.durationSeconds)}
+                {searchError ? (
+                  <Text variant="bodySmall" style={[styles.searchErrorText, { color: theme.colors.error }]}>
+                    {searchError}
                   </Text>
+                ) : null}
+                {searchResults.length > 0 && (
+                  <View style={styles.searchResultsContainer}>
+                    {searchResults.map((result) => (
+                      <Pressable
+                        key={result.videoId}
+                        style={[styles.searchResultCard, { borderColor: theme.colors.surfaceVariant }]}
+                        onPress={() => handleSearchResultSelect(result)}
+                      >
+                        <Image
+                          source={
+                            result.thumbnailUrl
+                              ? { uri: result.thumbnailUrl }
+                              : require('@/assets/images/react-logo.png')
+                          }
+                          style={styles.searchThumbnail}
+                          contentFit="cover"
+                        />
+                        <View style={styles.searchInfo}>
+                          <Text variant="titleSmall" numberOfLines={1}>
+                            {result.title}
+                          </Text>
+                          <Text variant="bodySmall" numberOfLines={1}>
+                            {result.channelTitle ?? '未知频道'}
+                          </Text>
+                        </View>
+                        <Button mode="contained" onPress={() => handleSearchResultSelect(result)}>
+                          播放
+                        </Button>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
+
+                <View style={styles.albumContainer}>
+                  {playerState === 'loading' && (
+                    <Animated.View style={[styles.ripple, rippleStyle]} />
+                  )}
+                  {currentTrack && showBanner ? (
+                    currentTrack.thumbnailUrl ? (
+                      <Animated.Image
+                        source={{ uri: currentTrack.thumbnailUrl }}
+                        style={[styles.albumArt, animatedImageStyle]}
+                      />
+                    ) : (
+                      <View style={[styles.albumArt, { backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
+                    )
+                  ) : (
+                    <View style={[styles.albumArt, { overflow: 'hidden', backgroundColor: 'black' }]}>
+                      <AppBackground style={{ width: '100%', height: '100%' }} />
+                    </View>
+                  )}
                 </View>
-                <View style={styles.trackActions}>
-                  <Pressable style={styles.smallButton} onPress={() => handleTrackPlay(track.videoId)}>
-                    <Text style={styles.smallButtonText}>播放</Text>
-                  </Pressable>
-                  <Pressable style={styles.smallButton} onPress={() => toggleTrackSelection(track.videoId)}>
-                    <Text style={styles.smallButtonText}>{selected ? '取消' : '选择'}</Text>
-                  </Pressable>
-                  <Pressable style={styles.smallButton} onPress={() => handleDeleteTrack(track.videoId)}>
-                    <Text style={styles.smallButtonText}>删除</Text>
-                  </Pressable>
+
+                {currentTrack && showBanner && (
+                  <View style={styles.trackInfoContainer}>
+                    <Text variant="titleMedium" numberOfLines={1} style={{ textAlign: 'center', color: TextColors.primary }}>
+                      {currentTrack.title}
+                    </Text>
+                    <Text variant="bodySmall" style={{ color: TextColors.secondary }}>
+                      {currentTrack.author}
+                    </Text>
+                  </View>
+                )}
+
+                <View style={styles.controls}>
+                  <IconButton
+                    icon="play"
+                    mode="contained"
+                    containerColor={theme.colors.primary}
+                    iconColor={theme.colors.onPrimary}
+                    size={40}
+                    onPress={playerState === 'paused' ? handleResume : handlePlay}
+                    disabled={!parsedVideoId || playerState === 'loading'}
+                  />
+                  <IconButton
+                    icon="pause"
+                    mode="contained-tonal"
+                    size={32}
+                    onPress={handlePause}
+                    disabled={playerState !== 'playing'}
+                  />
+                  <IconButton
+                    icon="stop"
+                    mode="outlined"
+                    size={32}
+                    onPress={stopPlayback}
+                    disabled={playerState === 'idle'}
+                  />
+                  <IconButton
+                    icon={loopEnabled ? "repeat-once" : "repeat-off"}
+                    mode={loopEnabled ? "contained" : "outlined"}
+                    containerColor={loopEnabled ? theme.colors.primary : undefined}
+                    iconColor={loopEnabled ? theme.colors.onPrimary : undefined}
+                    size={32}
+                    onPress={() => handleLoopToggle(!loopEnabled)}
+                    disabled={playerState === 'idle'}
+                  />
                 </View>
+
+                <Text variant="labelSmall" style={{ textAlign: 'center', marginTop: 10 }}>
+                  {PLAYER_STATE_COPY[playerState]}
+                </Text>
+
+                {playerState !== 'idle' && (
+                  <View style={styles.sliderContainer}>
+                    <Slider
+                      style={styles.slider}
+                      minimumValue={0}
+                      maximumValue={sliderMax}
+                      value={sliderValue}
+                      minimumTrackTintColor={theme.colors.primary}
+                      maximumTrackTintColor={theme.colors.surfaceVariant}
+                      thumbTintColor={theme.colors.primary}
+                      disabled={duration <= 0}
+                      onSlidingStart={(value) => {
+                        setIsSeeking(true);
+                        setSeekValue(value ?? 0);
+                      }}
+                      onValueChange={(value) => {
+                        if (!isSeeking) {
+                          setIsSeeking(true);
+                        }
+                        setSeekValue(value ?? 0);
+                      }}
+                      onSlidingComplete={async (value) => {
+                        const nextValue = value ?? 0;
+                        setIsSeeking(false);
+                        setSeekValue(nextValue);
+                        setPosition(nextValue);
+                        if (soundRef.current) {
+                          try {
+                            await soundRef.current.setPositionAsync(nextValue);
+                          } catch (error) {
+                            console.warn('Unable to seek playback', error);
+                          }
+                        }
+                      }}
+                    />
+                    <View style={styles.timeRow}>
+                      <Text variant="labelSmall" style={{ color: TextColors.primary }}>{formatTime(displayedPosition)}</Text>
+                      <Text variant="labelSmall" style={{ color: TextColors.primary }}>{duration > 0 ? formatTime(duration) : '--:--'}</Text>
+                    </View>
+                  </View>
+                )}
+
               </View>
-            );
-          })
-        )}
+            </BlurView>
 
-        <Text style={styles.hint}>已选择 {selectedTrackIds.length} 首歌曲用于分组</Text>
-      </View>
+            <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{`Tracks (${tracks.length})`}</Text>
+                <IconButton icon="refresh" onPress={fetchTracks} iconColor={theme.colors.onSurface} />
+              </View>
+              <View style={styles.cardContent}>
+                {tracksLoading ? (
+                  <PaperActivityIndicator />
+                ) : tracks.length === 0 ? (
+                  <Text style={{ color: TextColors.secondary }}>No cached tracks.</Text>
+                ) : (
+                  Platform.OS === 'web' ? (
+                    <View style={{ height: 400 }}>
+                      <FlatList
+                        data={tracks}
+                        keyExtractor={(item) => item.videoId}
+                        renderItem={({ item }) => {
+                          const selected = selectedTrackIds.includes(item.videoId);
+                          const playing = currentTrackId === item.videoId;
+                          return (
+                            <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
+                              <Card.Content style={styles.trackItemContent}>
+                                <View style={{ flex: 1 }}>
+                                  <Text variant="titleSmall" numberOfLines={1} style={{ color: TextColors.primary }}>{item.title}</Text>
+                                  <Text variant="bodySmall" style={{ color: TextColors.secondary }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
+                                </View>
+                                <View style={styles.trackActions}>
+                                  <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
+                                  <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(item.videoId)} />
+                                  <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(item.videoId)} />
+                                </View>
+                              </Card.Content>
+                            </Card>
+                          );
+                        }}
+                      />
+                    </View>
+                  ) : (
+                    <NestableDraggableFlatList
+                      data={tracks}
+                      style={{ maxHeight: 600 }}
+                      onDragEnd={async ({ data }) => {
+                        setTracks(data);
+                        try {
+                          const order = data.map(t => t.videoId);
+                          await AsyncStorage.setItem(TRACK_ORDER_KEY, JSON.stringify(order));
+                        } catch (e) {
+                          console.warn('Failed to save track order', e);
+                        }
+                      }}
+                      keyExtractor={(item) => item.videoId}
+                      renderItem={({ item, drag, isActive }: RenderItemParams<TrackMetadata>) => {
+                        const selected = selectedTrackIds.includes(item.videoId);
+                        const playing = currentTrackId === item.videoId;
+                        return (
+                          <ScaleDecorator>
+                            <Pressable onLongPress={drag} disabled={isActive} delayLongPress={200}>
+                              <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }, isActive && { opacity: 0.7, backgroundColor: 'rgba(255,255,255,0.1)' }]}>
+                                <Card.Content style={styles.trackItemContent}>
+                                  <View style={{ flex: 1 }}>
+                                    <Text variant="titleSmall" numberOfLines={1} style={{ color: TextColors.primary }}>{item.title}</Text>
+                                    <Text variant="bodySmall" style={{ color: TextColors.secondary }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
+                                  </View>
+                                  <View style={styles.trackActions}>
+                                    <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
+                                    <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(item.videoId)} />
+                                    <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(item.videoId)} />
+                                    <Pressable onLongPress={drag} delayLongPress={0} disabled={isActive} hitSlop={20} style={{ padding: 8 }}>
+                                      <MaterialCommunityIcons name="drag" size={24} color="rgba(255,255,255,0.5)" />
+                                    </Pressable>
+                                  </View>
+                                </Card.Content>
+                              </Card>
+                            </Pressable>
+                          </ScaleDecorator>
+                        );
+                      }}
+                    />
+                  )
+                )}
+                <Text style={styles.hint}>Selected: {selectedTrackIds.length}</Text>
+              </View>
+            </BlurView>
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>创建分组</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="分组名称，例如 睡前循环"
-          placeholderTextColor="#9aa0a6"
-          value={newGroupName}
-          onChangeText={setNewGroupName}
+            {selectedTrackIds.length > 0 && (
+              <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>Create Group</Text>
+                </View>
+                <View style={styles.cardContent}>
+                  <TextInput
+                    mode="outlined"
+                    label="Group Name"
+                    value={newGroupName}
+                    onChangeText={setNewGroupName}
+                    style={styles.input}
+                    textColor="white"
+                    theme={{
+                      colors: {
+                        onSurfaceVariant: 'rgba(255, 255, 255, 0.7)',
+                        primary: 'white',
+                        background: '#1e1e28',
+                      },
+                    }}
+                  />
+                  <Button
+                    mode="contained"
+                    onPress={handleCreateGroup}
+                    disabled={!newGroupName.trim() || !selectedTrackIds.length}
+                    style={{ marginTop: 10 }}
+                  >
+                    Create Group
+                  </Button>
+                </View>
+              </BlurView>
+            )}
+
+            <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionTitle}>{`Groups (${groups.length})`}</Text>
+              </View>
+              <View style={styles.cardContent}>
+                <ScrollView style={{ maxHeight: 450 }} nestedScrollEnabled>
+                  {groupsLoading ? (
+                    <PaperActivityIndicator />
+                  ) : (
+                    groups.map((group) => (
+                      <Card key={group.id} mode="contained" style={[styles.groupItem, activeGroupId === group.id && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
+                        <Card.Content style={styles.groupItemContent}>
+                          <View style={{ flex: 1 }}>
+                            <Text variant="titleSmall" style={{ color: TextColors.primary }}>{group.name}</Text>
+                            <Text variant="bodySmall" style={{ color: TextColors.secondary }}>{group.trackIds.length} tracks</Text>
+                          </View>
+                          <View style={styles.trackActions}>
+                            <IconButton icon="play" iconColor="white" onPress={() => handleGroupPlayback(group.id)} />
+                            <IconButton icon="playlist-edit" iconColor="white" onPress={() => setViewingGroup(group)} />
+                            <IconButton icon="delete" iconColor="white" onPress={() => handleDeleteGroup(group.id)} />
+                            <IconButton
+                              icon={groupLoopEnabled ? "repeat" : "repeat-off"}
+                              iconColor="white"
+                              onPress={() => setGroupLoopEnabled(!groupLoopEnabled)}
+                            />
+                          </View>
+                        </Card.Content>
+                      </Card>
+                    ))
+                  )}
+                </ScrollView>
+              </View>
+            </BlurView>
+          </ScrollComponent>
+        </View >
+        <GroupDetailModal
+          visible={!!viewingGroup}
+          onDismiss={() => setViewingGroup(null)}
+          group={viewingGroup}
+          allTracks={tracks}
+          onUpdateGroup={handleUpdateGroup}
+          onPlayGroup={(groupId) => {
+            handleGroupPlayback(groupId);
+            setViewingGroup(null);
+          }}
         />
-        <Pressable
-          style={[styles.button, (!newGroupName.trim() || !selectedTrackIds.length) ? styles.buttonDisabled : null]}
-          disabled={!newGroupName.trim() || !selectedTrackIds.length}
-          onPress={handleCreateGroup}>
-          <Text style={styles.buttonText}>创建分组</Text>
-        </Pressable>
-      </View>
-
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>分组播放 ({groups.length})</Text>
-          <View style={styles.inlineRow}>
-            <Text style={styles.statusText}>循环播放</Text>
-            <Switch
-              value={groupLoopEnabled}
-              onValueChange={setGroupLoopEnabled}
-              trackColor={{ false: '#3c4043', true: '#1a73e8' }}
-              thumbColor="#f1f3f4"
-            />
-          </View>
-        </View>
-
-        {groupsLoading ? (
-          <ActivityIndicator color="#4285f4" style={styles.loader} />
-        ) : groups.length === 0 ? (
-          <Text style={styles.hint}>创建分组后可一键循环播放多个歌曲。</Text>
-        ) : (
-          groups.map((group) => (
-            <View key={group.id} style={[styles.groupCard, activeGroupId === group.id ? styles.groupCardActive : null]}>
-              <View>
-                <Text style={styles.trackTitle}>{group.name}</Text>
-                <Text style={styles.trackMeta}>{group.trackIds.length} 首歌曲</Text>
-              </View>
-              <View style={styles.trackActions}>
-                <Pressable style={styles.smallButton} onPress={() => handleGroupPlayback(group.id)}>
-                  <Text style={styles.smallButtonText}>播放分组</Text>
-                </Pressable>
-                <Pressable style={styles.smallButton} onPress={() => handleDeleteGroup(group.id)}>
-                  <Text style={styles.smallButtonText}>删除</Text>
-                </Pressable>
-              </View>
-            </View>
-          ))
-        )}
-      </View>
-
-      {playerState === 'loading' && <ActivityIndicator color="#4285f4" style={styles.loader} />}
-
-      {message && <Text style={styles.warning}>{message}</Text>}
-    </ScrollView>
+      </Animated.View>
+    </View >
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#050505',
   },
   content: {
-    padding: 24,
-    gap: 20,
+    padding: 20,
+    paddingBottom: 100,
   },
   heading: {
-    color: '#ffffff',
-    fontSize: 24,
-    fontWeight: '600',
+    textAlign: 'center',
     marginBottom: 8,
+    fontWeight: 'bold',
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
-  subtitle: {
-    color: '#e8eaed',
-    fontSize: 14,
-    marginBottom: 8,
-  },
-  section: {
-    backgroundColor: '#0e0f11',
-    padding: 16,
-    borderRadius: 18,
-    gap: 12,
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: TextColors.primary,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 20, // Increased padding to prevent clipping
+    paddingBottom: 8,
   },
-  sectionTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
+  subtitle: {
+    textAlign: 'center',
+    marginBottom: 24,
+    opacity: 0.8,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  mainCard: {
+    marginBottom: 20,
+    elevation: 4,
+  },
+  sectionCard: {
+    marginBottom: 16,
+    elevation: 2,
   },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'center',
+    marginBottom: 16,
   },
   statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 8,
   },
   online: {
-    backgroundColor: '#34a853',
+    backgroundColor: StatusColors.success,
   },
   offline: {
-    backgroundColor: '#ea4335',
-  },
-  statusText: {
-    color: '#e8eaed',
+    backgroundColor: StatusColors.error,
   },
   input: {
-    borderRadius: 12,
-    backgroundColor: '#1a1a1c',
-    padding: 16,
-    color: '#ffffff',
+    marginBottom: Spacing.md,
+    backgroundColor: SurfaceColors.input,
+  },
+  searchResultsContainer: {
+    gap: 8,
+    marginVertical: 8,
+  },
+  searchResultCard: {
     borderWidth: 1,
-    borderColor: '#3c4043',
-  },
-  hint: {
-    color: '#9aa0a6',
-  },
-  actions: {
+    borderRadius: BorderRadius.md,
+    padding: Spacing.sm,
     flexDirection: 'row',
-    gap: 12,
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 12,
     alignItems: 'center',
-    backgroundColor: '#1a73e8',
+    gap: Spacing.md,
   },
-  buttonDisabled: {
-    backgroundColor: '#3c4043',
+  searchThumbnail: {
+    width: 64,
+    height: 64,
+    borderRadius: BorderRadius.sm,
+    backgroundColor: SurfaceColors.input,
   },
-  buttonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  warning: {
-    color: '#fbbc04',
-    marginTop: 8,
-  },
-  loopRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: '#2c2d30',
-  },
-  slider: {
-    width: '100%',
-    height: 32,
-  },
-  progressLabel: {
-    marginTop: 6,
-    color: '#bdc1c6',
-    textAlign: 'right',
-    fontVariant: ['tabular-nums'],
-  },
-  loader: {
-    marginTop: 8,
-  },
-  trackCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#2c2d30',
-    padding: 12,
-    marginBottom: 12,
-    backgroundColor: '#141517',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-  },
-  trackCardActive: {
-    borderColor: '#1a73e8',
-  },
-  trackInfo: {
+  searchInfo: {
     flex: 1,
     gap: 4,
   },
+  searchErrorText: {
+    marginTop: 4,
+  },
+  albumContainer: {
+    alignItems: 'center',
+    marginVertical: 20,
+  },
+  albumArt: {
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  ripple: {
+    position: 'absolute',
+    width: 280,
+    height: 280,
+    borderRadius: 140,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    zIndex: -1,
+  },
+  albumImage: {
+    width: '100%',
+    height: '100%',
+  },
+  glassCard: {
+    borderRadius: BorderRadius.xxl,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: BorderColors.subtle,
+    marginVertical: Spacing.xl,
+    backgroundColor: SurfaceColors.card,
+  },
+  cardContent: {
+    padding: Spacing.xxl,
+    backgroundColor: 'transparent',
+  },
+  trackInfoContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  controls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: Spacing.xl,
+    marginBottom: Spacing.xl,
+  },
+  sliderContainer: {
+    marginTop: 10,
+  },
+  slider: {
+    width: '100%',
+    height: 40,
+  },
+  timeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+  },
+  loopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 16,
+  },
+  trackList: {
+    paddingBottom: 16,
+  },
+  trackItem: {
+    marginBottom: Spacing.md,
+    backgroundColor: SurfaceColors.listItem,
+    borderRadius: BorderRadius.md,
+    borderWidth: 1,
+    borderColor: BorderColors.subtle,
+  },
+  trackItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  trackInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
   trackTitle: {
-    color: '#fff',
+    color: TextColors.primary,
     fontSize: 16,
     fontWeight: '600',
   },
-  trackMeta: {
-    color: '#9aa0a6',
-    fontSize: 12,
+  trackArtist: {
+    color: TextColors.secondary,
+    fontSize: 14,
   },
   trackActions: {
     flexDirection: 'row',
-    gap: 8,
-  },
-  smallButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#3c4043',
-    backgroundColor: '#1f2124',
-  },
-  smallButtonText: {
-    color: '#e8eaed',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  groupCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#2c2d30',
-    padding: 12,
-    marginBottom: 12,
-    backgroundColor: '#111215',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
   },
-  groupCardActive: {
-    borderColor: '#1a73e8',
+  groupItem: {
+    marginBottom: Spacing.md,
+    backgroundColor: SurfaceColors.listItem,
+    borderRadius: BorderRadius.lg,
+    borderWidth: 1,
+    borderColor: BorderColors.subtle,
+    overflow: 'hidden',
+  },
+  groupItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   inlineRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  hint: {
+    marginTop: 8,
+    textAlign: 'center',
+    opacity: 0.6,
   },
 });

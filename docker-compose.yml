@@ -7,3 +7,23 @@ services:
     ports:
       - "3000:3000"
     restart: unless-stopped
+
+  mobile-audio-player:
+    build:
+      context: .
+      dockerfile: apps/mobile-audio-player/Dockerfile
+    env_file: apps/mobile-audio-player/.env
+    ports:
+      - "3333:3333"
+    environment:
+      - EXPO_PUBLIC_API_BASE_URL=http://audio-stream-gateway:3000
+    volumes:
+      # 挂载源代码，实现热更新
+      - ./apps/mobile-audio-player/app:/app/apps/mobile-audio-player/app
+      - ./apps/mobile-audio-player/components:/app/apps/mobile-audio-player/components
+      - ./apps/mobile-audio-player/constants:/app/apps/mobile-audio-player/constants
+      - ./apps/mobile-audio-player/context:/app/apps/mobile-audio-player/context
+      - ./apps/mobile-audio-player/hooks:/app/apps/mobile-audio-player/hooks
+    depends_on:
+      - audio-stream-gateway
+    restart: unless-stopped

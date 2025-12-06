@@ -5,9 +5,10 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev:gateway": "pnpm --filter audio-stream-gateway dev",
+    "dev:gateway": "docker compose up audio-stream-gateway --build -d",
     "start:gateway": "pnpm --filter audio-stream-gateway start",
-    "dev:mobile": "pnpm --filter mobile-audio-player start"
+    "dev:mobile": "pnpm --filter mobile-audio-player start",
+    "prebuild:mobile:ios": "pnpm --filter mobile-audio-player exec expo prebuild --platform ios"
   },
   "keywords": [],
   "author": "",
