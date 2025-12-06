@@ -6,6 +6,8 @@ import {
   StyleSheet,
   Switch,
   View,
+  Platform,
+  FlatList,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Audio, AVPlaybackStatus } from 'expo-av';
@@ -15,11 +17,14 @@ import { Image } from 'expo-image';
 import { IconButton, Text, Button, Card, useTheme, ActivityIndicator as PaperActivityIndicator, TextInput } from 'react-native-paper';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, Easing, withRepeat } from 'react-native-reanimated';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { NestableDraggableFlatList, NestableScrollContainer, ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { useSettings } from '@/context/settings-context';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
 const KEEP_ALIVE_INTERVAL_MS = 10 * 60 * 1000;
+const TRACK_ORDER_KEY = 'kplayer_track_order';
 
 type PlayerState = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
 
@@ -272,7 +277,31 @@ export default function HomeScreen() {
     setTracksLoading(true);
     try {
       const response = await axios.get(`${STREAM_BASE_URL}/tracks`);
-      setTracks(response.data?.tracks ?? []);
+      const fetchedTracks: TrackMetadata[] = response.data?.tracks ?? [];
+
+      const savedOrderString = await AsyncStorage.getItem(TRACK_ORDER_KEY);
+      if (savedOrderString) {
+        try {
+          const savedOrder: string[] = JSON.parse(savedOrderString);
+          const orderedTracks: TrackMetadata[] = [];
+          const remainingTracks = [...fetchedTracks];
+
+          savedOrder.forEach(id => {
+            const index = remainingTracks.findIndex(t => t.videoId === id);
+            if (index !== -1) {
+              orderedTracks.push(remainingTracks[index]);
+              remainingTracks.splice(index, 1);
+            }
+          });
+
+          setTracks([...orderedTracks, ...remainingTracks]);
+        } catch (e) {
+          console.warn('Failed to parse saved track order', e);
+          setTracks(fetchedTracks);
+        }
+      } else {
+        setTracks(fetchedTracks);
+      }
     } catch (error) {
       console.warn('Failed to fetch track metadata', error);
     } finally {
@@ -773,11 +802,13 @@ export default function HomeScreen() {
 
   const currentTrack = tracks.find((t) => t.videoId === currentTrackId);
 
+  const ScrollComponent = (Platform.OS === 'web' ? ScrollView : NestableScrollContainer) as React.ComponentType<any>;
+
   return (
     <View style={{ flex: 1, backgroundColor: 'black' }}>
       <AppBackground style={{ position: 'absolute', width: '100%', height: '100%' }} />
       <View style={styles.container}>
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.content}>
+        <ScrollComponent style={{ flex: 1 }} contentContainerStyle={styles.content}>
           <Text variant="headlineMedium" style={[styles.heading, { color: 'white' }]}>
             Kingsley Player
           </Text>
@@ -986,33 +1017,80 @@ export default function HomeScreen() {
               <IconButton icon="refresh" onPress={fetchTracks} iconColor={theme.colors.onSurface} />
             </View>
             <View style={styles.cardContent}>
-              <ScrollView style={{ maxHeight: 600 }} nestedScrollEnabled>
-                {tracksLoading ? (
-                  <PaperActivityIndicator />
-                ) : tracks.length === 0 ? (
-                  <Text style={{ color: theme.colors.onSurfaceVariant }}>No cached tracks.</Text>
+              {tracksLoading ? (
+                <PaperActivityIndicator />
+              ) : tracks.length === 0 ? (
+                <Text style={{ color: theme.colors.onSurfaceVariant }}>No cached tracks.</Text>
+              ) : (
+                Platform.OS === 'web' ? (
+                  <View style={{ height: 400 }}>
+                    <FlatList
+                      data={tracks}
+                      keyExtractor={(item) => item.videoId}
+                      renderItem={({ item }) => {
+                        const selected = selectedTrackIds.includes(item.videoId);
+                        const playing = currentTrackId === item.videoId;
+                        return (
+                          <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
+                            <Card.Content style={styles.trackItemContent}>
+                              <View style={{ flex: 1 }}>
+                                <Text variant="titleSmall" numberOfLines={1} style={{ color: 'white' }}>{item.title}</Text>
+                                <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
+                              </View>
+                              <View style={styles.trackActions}>
+                                <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
+                                <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(item.videoId)} />
+                                <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(item.videoId)} />
+                              </View>
+                            </Card.Content>
+                          </Card>
+                        );
+                      }}
+                    />
+                  </View>
                 ) : (
-                  tracks.map((track) => {
-                    const selected = selectedTrackIds.includes(track.videoId);
-                    const playing = currentTrackId === track.videoId;
-                    return (
-                      <Card key={track.videoId} mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }]}>
-                        <Card.Content style={styles.trackItemContent}>
-                          <View style={{ flex: 1 }}>
-                            <Text variant="titleSmall" numberOfLines={1} style={{ color: 'white' }}>{track.title}</Text>
-                            <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{track.author} · {formatDuration(track.durationSeconds)}</Text>
-                          </View>
-                          <View style={styles.trackActions}>
-                            <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(track.videoId)} />
-                            <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(track.videoId)} />
-                            <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(track.videoId)} />
-                          </View>
-                        </Card.Content>
-                      </Card>
-                    );
-                  })
-                )}
-              </ScrollView>
+                  <NestableDraggableFlatList
+                    data={tracks}
+                    style={{ maxHeight: 600 }}
+                    onDragEnd={async ({ data }) => {
+                      setTracks(data);
+                      try {
+                        const order = data.map(t => t.videoId);
+                        await AsyncStorage.setItem(TRACK_ORDER_KEY, JSON.stringify(order));
+                      } catch (e) {
+                        console.warn('Failed to save track order', e);
+                      }
+                    }}
+                    keyExtractor={(item) => item.videoId}
+                    renderItem={({ item, drag, isActive }: RenderItemParams<TrackMetadata>) => {
+                      const selected = selectedTrackIds.includes(item.videoId);
+                      const playing = currentTrackId === item.videoId;
+                      return (
+                        <ScaleDecorator>
+                          <Pressable onLongPress={drag} disabled={isActive} delayLongPress={200}>
+                            <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }, isActive && { opacity: 0.7, backgroundColor: 'rgba(255,255,255,0.1)' }]}>
+                              <Card.Content style={styles.trackItemContent}>
+                                <View style={{ flex: 1 }}>
+                                  <Text variant="titleSmall" numberOfLines={1} style={{ color: 'white' }}>{item.title}</Text>
+                                  <Text variant="bodySmall" style={{ color: 'rgba(255,255,255,0.7)' }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
+                                </View>
+                                <View style={styles.trackActions}>
+                                  <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
+                                  <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(item.videoId)} />
+                                  <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(item.videoId)} />
+                                  <Pressable onLongPress={drag} delayLongPress={0} disabled={isActive} hitSlop={20} style={{ padding: 8 }}>
+                                    <MaterialCommunityIcons name="drag" size={24} color="rgba(255,255,255,0.5)" />
+                                  </Pressable>
+                                </View>
+                              </Card.Content>
+                            </Card>
+                          </Pressable>
+                        </ScaleDecorator>
+                      );
+                    }}
+                  />
+                )
+              )}
               <Text style={styles.hint}>Selected: {selectedTrackIds.length}</Text>
             </View>
           </BlurView>
@@ -1087,9 +1165,9 @@ export default function HomeScreen() {
               </ScrollView>
             </View>
           </BlurView>
-        </ScrollView>
-      </View>
-    </View>
+        </ScrollComponent>
+      </View >
+    </View >
   );
 }
 
