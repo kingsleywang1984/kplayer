@@ -115,6 +115,7 @@ const extractVideoId = (input: string): string | null => {
 
 import { AppBackground } from '@/components/AppBackground';
 import { BlurView } from 'expo-blur';
+import { GroupDetailModal } from '@/components/GroupDetailModal';
 
 export default function HomeScreen() {
   const { autoRefreshEnabled, keepAliveEnabled } = useSettings();
@@ -147,6 +148,8 @@ export default function HomeScreen() {
     groupId: null,
   });
   const initiatePlaybackRef = useRef<((videoId: string, options?: PlaybackOptions) => Promise<void>) | null>(null);
+
+  const [viewingGroup, setViewingGroup] = useState<GroupMetadata | null>(null);
 
   const autoPlayLibraryTrack = useCallback(
     (previousVideoId?: string | null) => {
@@ -673,6 +676,27 @@ export default function HomeScreen() {
     [fetchGroups, stopPlayback]
   );
 
+  const handleUpdateGroup = useCallback(async (groupId: string, name: string, trackIds: string[]) => {
+    if (!STREAM_BASE_URL) {
+      setMessage('Backend not configured');
+      return;
+    }
+    try {
+      await axios.put(`${STREAM_BASE_URL}/groups/${groupId}`, {
+        name,
+        trackIds
+      });
+      fetchGroups();
+      // Update the currently viewing group to reflect changes immediately in UI if needed,
+      // but fetchGroups should handle it. However, fetchGroups is async.
+      // We can also optimize by updating the local state.
+      setViewingGroup(prev => prev ? { ...prev, trackIds } : null);
+    } catch (error) {
+      console.error('Failed to update group', error);
+      setMessage('Failed to update group');
+    }
+  }, [fetchGroups]);
+
   const handleTrackPlay = useCallback(
     async (videoId: string) => {
       setYoutubeInput(`https://www.youtube.com/watch?v=${videoId}`);
@@ -1156,6 +1180,7 @@ export default function HomeScreen() {
                         </View>
                         <View style={styles.trackActions}>
                           <IconButton icon="play" iconColor="white" onPress={() => handleGroupPlayback(group.id)} />
+                          <IconButton icon="playlist-edit" iconColor="white" onPress={() => setViewingGroup(group)} />
                           <IconButton icon="delete" iconColor="white" onPress={() => handleDeleteGroup(group.id)} />
                         </View>
                       </Card.Content>
@@ -1167,6 +1192,17 @@ export default function HomeScreen() {
           </BlurView>
         </ScrollComponent>
       </View >
+      <GroupDetailModal
+        visible={!!viewingGroup}
+        onDismiss={() => setViewingGroup(null)}
+        group={viewingGroup}
+        allTracks={tracks}
+        onUpdateGroup={handleUpdateGroup}
+        onPlayGroup={(groupId) => {
+          handleGroupPlayback(groupId);
+          setViewingGroup(null);
+        }}
+      />
     </View >
   );
 }
