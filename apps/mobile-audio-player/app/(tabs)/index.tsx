@@ -118,7 +118,7 @@ import { BlurView } from 'expo-blur';
 import { GroupDetailModal } from '@/components/GroupDetailModal';
 
 export default function HomeScreen() {
-  const { autoRefreshEnabled, keepAliveEnabled } = useSettings();
+  const { autoRefreshEnabled, keepAliveEnabled, showBanner } = useSettings();
   const [youtubeInput, setYoutubeInput] = useState('');
   const [playerState, setPlayerState] = useState<PlayerState>('idle');
   const [message, setMessage] = useState<string | null>(null);
@@ -928,7 +928,7 @@ export default function HomeScreen() {
                 {playerState === 'loading' && (
                   <Animated.View style={[styles.ripple, rippleStyle]} />
                 )}
-                {currentTrack ? (
+                {currentTrack && showBanner ? (
                   currentTrack.thumbnailUrl ? (
                     <Animated.Image
                       source={{ uri: currentTrack.thumbnailUrl }}

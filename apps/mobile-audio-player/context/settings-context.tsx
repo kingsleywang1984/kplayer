@@ -36,6 +36,8 @@ type SettingsContextValue = {
   setAutoRefreshEnabled: (value: boolean) => void;
   setKeepAliveEnabled: (value: boolean) => void;
   setBackgroundMode: (value: BackgroundMode) => void;
+  showBanner: boolean;
+  setShowBanner: (value: boolean) => void;
 };
 
 const SettingsContext = createContext<SettingsContextValue | undefined>(undefined);
@@ -44,6 +46,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(DEFAULT_AUTO_REFRESH_ENABLED);
   const [keepAliveEnabled, setKeepAliveEnabled] = useState(DEFAULT_KEEP_ALIVE_ENABLED);
   const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>('galaxy');
+  const [showBanner, setShowBanner] = useState(true);
 
   const value = useMemo(
     () => ({
@@ -53,8 +56,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setAutoRefreshEnabled,
       setKeepAliveEnabled,
       setBackgroundMode,
+      showBanner,
+      setShowBanner,
     }),
-    [autoRefreshEnabled, keepAliveEnabled, backgroundMode]
+    [autoRefreshEnabled, keepAliveEnabled, backgroundMode, showBanner]
   );
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;

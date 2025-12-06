@@ -19,6 +19,8 @@ export default function SettingsScreen() {
     setAutoRefreshEnabled,
     setKeepAliveEnabled,
     setBackgroundMode,
+    showBanner,
+    setShowBanner,
   } = useSettings();
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
 
@@ -204,6 +206,25 @@ export default function SettingsScreen() {
                 显示后端服务的连接状态。
               </Text>
             </View>
+          </View>
+        </BlurView>
+
+        <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+          <View style={styles.cardContent}>
+            <View style={styles.cardText}>
+              <Text style={styles.cardTitle}>显示歌曲封面</Text>
+              <Text style={styles.cardSubtitle}>
+                {showBanner ? '开启' : '关闭'}
+              </Text>
+              <Text style={styles.cardDescription}>
+                播放时是否在中间显示歌曲的封面图片。关闭后将显示背景动画。
+              </Text>
+            </View>
+            <Switch
+              value={showBanner}
+              onValueChange={setShowBanner}
+              trackColor={{ true: Colors.dark.tint, false: '#5f6368' }}
+            />
           </View>
         </BlurView>
 
