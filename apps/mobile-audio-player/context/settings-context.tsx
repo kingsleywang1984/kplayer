@@ -1,5 +1,6 @@
-import { createContext, useContext, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const toBooleanWithDefaultTrue = (value?: string | null) => {
   if (typeof value !== 'string') {
@@ -29,6 +30,13 @@ const keepAliveEnvValue =
 const DEFAULT_AUTO_REFRESH_ENABLED = toBooleanWithDefaultTrue(autoRefreshEnvValue);
 const DEFAULT_KEEP_ALIVE_ENABLED = toBooleanWithDefaultTrue(keepAliveEnvValue);
 
+const STORAGE_KEYS = {
+  BACKGROUND_MODE: 'kplayer_background_mode',
+  SHOW_BANNER: 'kplayer_show_banner',
+  IDLE_TIMEOUT: 'kplayer_idle_timeout',
+  SHOW_DEBUG_CONSOLE: 'kplayer_show_debug_console',
+};
+
 type SettingsContextValue = {
   autoRefreshEnabled: boolean;
   keepAliveEnabled: boolean;
@@ -49,10 +57,60 @@ const SettingsContext = createContext<SettingsContextValue | undefined>(undefine
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(DEFAULT_AUTO_REFRESH_ENABLED);
   const [keepAliveEnabled, setKeepAliveEnabled] = useState(DEFAULT_KEEP_ALIVE_ENABLED);
-  const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>('galaxy');
+  const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>('pure_black'); // Default to pure_black for safety
   const [showBanner, setShowBanner] = useState(false);
   const [idleTimeout, setIdleTimeout] = useState(30);
   const [showDebugConsole, setShowDebugConsole] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Load settings from AsyncStorage on mount
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const [storedMode, storedBanner, storedTimeout, storedDebug] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEYS.BACKGROUND_MODE),
+          AsyncStorage.getItem(STORAGE_KEYS.SHOW_BANNER),
+          AsyncStorage.getItem(STORAGE_KEYS.IDLE_TIMEOUT),
+          AsyncStorage.getItem(STORAGE_KEYS.SHOW_DEBUG_CONSOLE),
+        ]);
+
+        if (storedMode) setBackgroundMode(storedMode as BackgroundMode);
+        if (storedBanner !== null) setShowBanner(storedBanner === 'true');
+        if (storedTimeout) setIdleTimeout(parseInt(storedTimeout, 10));
+        if (storedDebug !== null) setShowDebugConsole(storedDebug === 'true');
+
+        setIsLoaded(true);
+      } catch (error) {
+        console.error('Failed to load settings:', error);
+        setIsLoaded(true);
+      }
+    }
+    loadSettings();
+  }, []);
+
+  // Save backgroundMode when it changes
+  useEffect(() => {
+    if (!isLoaded) return;
+    AsyncStorage.setItem(STORAGE_KEYS.BACKGROUND_MODE, backgroundMode);
+  }, [backgroundMode, isLoaded]);
+
+  // Save showBanner when it changes
+  useEffect(() => {
+    if (!isLoaded) return;
+    AsyncStorage.setItem(STORAGE_KEYS.SHOW_BANNER, String(showBanner));
+  }, [showBanner, isLoaded]);
+
+  // Save idleTimeout when it changes
+  useEffect(() => {
+    if (!isLoaded) return;
+    AsyncStorage.setItem(STORAGE_KEYS.IDLE_TIMEOUT, String(idleTimeout));
+  }, [idleTimeout, isLoaded]);
+
+  // Save showDebugConsole when it changes
+  useEffect(() => {
+    if (!isLoaded) return;
+    AsyncStorage.setItem(STORAGE_KEYS.SHOW_DEBUG_CONSOLE, String(showDebugConsole));
+  }, [showDebugConsole, isLoaded]);
 
   const value = useMemo(
     () => ({
@@ -86,7 +144,7 @@ export function useSettings() {
 export const SETTINGS_DEFAULTS = {
   autoRefreshEnabled: DEFAULT_AUTO_REFRESH_ENABLED,
   keepAliveEnabled: DEFAULT_KEEP_ALIVE_ENABLED,
-  backgroundMode: 'galaxy' as BackgroundMode,
+  backgroundMode: 'pure_black' as BackgroundMode, // Default to pure_black to avoid background crashes
   showBanner: false,
   idleTimeout: 30,
   showDebugConsole: false,

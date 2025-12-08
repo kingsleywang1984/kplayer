@@ -7,6 +7,7 @@ import {
   View,
   Platform,
   FlatList,
+  LogBox,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import TrackPlayer, {
@@ -32,6 +33,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 
 import { useSettings } from '@/context/settings-context';
+import { useIdle } from '@/context/idle-context';
 import { TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
 import { AppBackground } from '@/components/AppBackground';
 import { GroupDetailModal } from '@/components/GroupDetailModal';
@@ -127,11 +129,15 @@ const extractVideoId = (input: string): string | null => {
   return null;
 };
 
+// Suppress VirtualizedList nesting warning - safe in this context with fixed-height containers
+LogBox.ignoreLogs([
+  'VirtualizedLists should never be nested',
+]);
 
 
 export default function HomeScreen() {
   const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout, showDebugConsole } = useSettings();
-  const isIdleShared = useSharedValue(0); // 0 = not idle, 1 = idle
+  const { isIdleShared } = useIdle();
   const idleTimerRef = useRef<any>(null);
   const [outerScrollEnabled, setOuterScrollEnabled] = useState(true);
   const [youtubeInput, setYoutubeInput] = useState('');
@@ -1184,6 +1190,8 @@ export default function HomeScreen() {
                     <View style={{ height: 400 }}>
                       <FlatList
                         data={tracks}
+                        scrollEnabled={true}
+                        nestedScrollEnabled
                         keyExtractor={(item) => item.videoId}
                         renderItem={({ item }) => {
                           const selected = selectedTrackIds.includes(item.videoId);
@@ -1210,6 +1218,7 @@ export default function HomeScreen() {
                     <View style={{ height: 450 }}>
                       <DraggableFlatList
                         data={tracks}
+                        scrollEnabled={true}
                         nestedScrollEnabled
                         onDragBegin={() => setOuterScrollEnabled(false)}
                         onRelease={() => setOuterScrollEnabled(true)}
