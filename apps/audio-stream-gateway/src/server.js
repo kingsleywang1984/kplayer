@@ -4,6 +4,8 @@ const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const ffmpeg = require('fluent-ffmpeg');
 const { PassThrough } = require('stream');
+const fs = require('fs');
+const path = require('path');
 const config = require('./config');
 const storage = require('./storage/r2Storage');
 
@@ -12,6 +14,7 @@ const app = express();
 const YOUTUBE_SEARCH_ENDPOINT = 'https://www.googleapis.com/youtube/v3/search';
 const MUSIC_CATEGORY_ID = '10';
 const YOUTUBE_MAX_RESULTS = 5;
+const COOKIES_FILE_PATH = path.join('/tmp', 'youtube-cookies.txt');
 
 app.use(
   cors({
@@ -172,15 +175,26 @@ function buildObjectKey(title, videoId) {
   return `audio/${slug}-${videoId}.mp3`;
 }
 
+// Helper function to build yt-dlp args with cookies if available
+function buildYtDlpArgs(baseArgs) {
+  const args = [...baseArgs];
+  if (fs.existsSync(COOKIES_FILE_PATH)) {
+    args.push('--cookies', COOKIES_FILE_PATH);
+    console.log('[yt-dlp] Using cookies file');
+  }
+  return args;
+}
+
 async function fetchVideoInfo(videoId) {
   const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
   return new Promise((resolve, reject) => {
-    const infoProcess = spawn('yt-dlp', [
+    const args = buildYtDlpArgs([
       '--dump-single-json',
       '--no-warnings',
       '--skip-download',
       youtubeUrl,
     ]);
+    const infoProcess = spawn('yt-dlp', args);
 
     let stdout = '';
     let stderr = '';
@@ -299,17 +313,30 @@ app.get('/stream/:videoId', async (req, res, next) => {
     }
 
     console.log(`[Stream] Cache miss for ${videoId}, fetching from YouTube`);
-    const videoInfo = await fetchVideoInfo(videoId);
-    const objectKey = buildObjectKey(videoInfo.title ?? videoId, videoId);
+
+    // Send response headers immediately to prevent client timeout
+    res.writeHead(200, {
+      'Content-Type': 'audio/mpeg',
+      'Transfer-Encoding': 'chunked',
+      'Cache-Control': 'no-cache',
+      'Accept-Ranges': 'none'
+    });
+    // Force flush headers to client immediately (don't wait for body data)
+    res.flushHeaders();
+    console.log(`[Stream] Headers flushed for ${videoId}`);
+
+    // Start download immediately without waiting for metadata (fetch metadata in background)
+    const objectKey = buildObjectKey(videoId, videoId); // Use videoId as title initially
     cacheKey = objectKey;
     const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const ytDlp = spawn('yt-dlp', [
+    const downloadArgs = buildYtDlpArgs([
       '-f', 'bestaudio/best',
       '-o', '-',
       '--quiet',
       '--no-warnings',
       youtubeUrl
     ]);
+    const ytDlp = spawn('yt-dlp', downloadArgs);
 
     ytDlp.stderr.on('data', (data) => {
       const message = data.toString();
@@ -360,10 +387,9 @@ app.get('/stream/:videoId', async (req, res, next) => {
     transcoderOutput.pipe(responseStream);
     transcoderOutput.pipe(cacheStream);
 
-    const uploadPromise = storage
-      .uploadStream(cacheKey, cacheStream)
-      .then(async () => {
-        console.log(`[Stream] Cached ${videoId} in R2`);
+    // Fetch metadata in background (don't block streaming)
+    const metadataPromise = fetchVideoInfo(videoId)
+      .then(async (videoInfo) => {
         const thumbnails = Array.isArray(videoInfo.thumbnails) ? videoInfo.thumbnails : [];
         const thumbnailUrl = videoInfo.thumbnail ?? thumbnails[thumbnails.length - 1]?.url ?? null;
         const metadataPayload = {
@@ -376,6 +402,26 @@ app.get('/stream/:videoId', async (req, res, next) => {
           createdAt: new Date().toISOString(),
         };
         await storage.saveTrackMetadata(metadataPayload);
+        console.log(`[Stream] Metadata saved for ${videoId}`);
+      })
+      .catch((error) => {
+        console.error(`[Stream] Failed to fetch metadata for ${videoId}`, error);
+        // Save minimal metadata as fallback
+        return storage.saveTrackMetadata({
+          videoId,
+          storageKey: cacheKey,
+          title: videoId,
+          author: 'Unknown',
+          durationSeconds: null,
+          thumbnailUrl: null,
+          createdAt: new Date().toISOString(),
+        });
+      });
+
+    const uploadPromise = storage
+      .uploadStream(cacheKey, cacheStream)
+      .then(() => {
+        console.log(`[Stream] Cached ${videoId} in R2`);
       })
       .catch((error) => {
         console.error(`[Stream] Failed to upload ${videoId} to R2`, error);
@@ -407,6 +453,55 @@ app.get('/stream/:videoId', async (req, res, next) => {
     }
   } catch (error) {
     next(error);
+  }
+});
+
+// YouTube Cookies Management
+app.post('/api/youtube-cookies', async (req, res) => {
+  try {
+    const { cookies } = req.body;
+
+    if (!cookies || typeof cookies !== 'string') {
+      return res.status(400).json({ message: 'Invalid cookies format' });
+    }
+
+    // Write cookies to file in Netscape format (yt-dlp compatible)
+    fs.writeFileSync(COOKIES_FILE_PATH, cookies, 'utf8');
+    console.log('[Cookies] YouTube cookies updated successfully');
+
+    res.json({
+      message: 'Cookies saved successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('[Cookies] Failed to save cookies', error);
+    res.status(500).json({ message: 'Failed to save cookies' });
+  }
+});
+
+app.get('/api/youtube-cookies/status', (req, res) => {
+  try {
+    const exists = fs.existsSync(COOKIES_FILE_PATH);
+
+    if (!exists) {
+      return res.json({
+        hasCookies: false,
+        message: 'No cookies found. Please login to YouTube.'
+      });
+    }
+
+    const stats = fs.statSync(COOKIES_FILE_PATH);
+    const ageHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
+
+    res.json({
+      hasCookies: true,
+      lastUpdated: stats.mtime.toISOString(),
+      ageHours: Math.round(ageHours * 10) / 10,
+      message: ageHours > 168 ? 'Cookies may be expired (>7 days old)' : 'Cookies active'
+    });
+  } catch (error) {
+    console.error('[Cookies] Failed to check status', error);
+    res.status(500).json({ message: 'Failed to check cookies status' });
   }
 });
 

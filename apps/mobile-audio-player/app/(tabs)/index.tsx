@@ -566,6 +566,9 @@ export default function HomeScreen() {
 
   const initiatePlayback = useCallback(
     async (videoId: string, options?: PlaybackOptions) => {
+      console.log('[initiatePlayback] Called with videoId:', videoId, 'options:', options, 'stack:', new Error().stack);
+      addDebugLog(`initiatePlayback: ${videoId}`);
+
       if (!videoId) {
         setMessage('请选择要播放的歌曲或输入链接');
         return;
@@ -599,19 +602,20 @@ export default function HomeScreen() {
 
       try {
         const metadata = tracks.find((track) => track.videoId === videoId);
+
+        // Allow playback even if metadata not cached yet - gateway will fetch and cache automatically
         if (!metadata) {
-          addDebugLog('Metadata not found for videoId: ' + videoId);
-          return;
+          addDebugLog('Metadata not cached, will fetch from gateway: ' + videoId);
         }
 
         await TrackPlayer.reset();
         await TrackPlayer.add({
           id: videoId,
           url: `${STREAM_BASE_URL}/stream/${encodeURIComponent(videoId)}`,
-          title: metadata.title,
-          artist: metadata.author,
-          artwork: metadata.thumbnailUrl ?? undefined,
-          duration: metadata.durationSeconds ?? 0,
+          title: metadata?.title ?? videoId,
+          artist: metadata?.author ?? 'Unknown',
+          artwork: metadata?.thumbnailUrl ?? undefined,
+          duration: metadata?.durationSeconds ?? 0,
         });
 
         // On mobile, we handle looping manually via PlaybackQueueEnded event (RepeatMode.Track is unreliable with streams)
@@ -623,6 +627,13 @@ export default function HomeScreen() {
 
         await TrackPlayer.play();
         setCurrentTrackId(videoId);
+
+        // If this was a new track (not cached), refresh metadata after a delay
+        if (!metadata) {
+          setTimeout(() => {
+            fetchTracks().catch(err => console.warn('Failed to refresh tracks after playback', err));
+          }, 2000);
+        }
       } catch (error) {
         console.error('Unable to start playback', error);
         addDebugLog(`Playback error: ${error}`);
@@ -648,6 +659,15 @@ export default function HomeScreen() {
       console.warn('Playback Error:', event);
       addDebugLog(`Error: ${event.message} (${event.code})`);
       setMessage(`播放出错: ${event.message || '未知错误'}`);
+
+      // Stop playback on error to prevent infinite retries
+      try {
+        await TrackPlayer.reset();
+        setCurrentTrackId(null);
+        clearQueue();
+      } catch (err) {
+        console.warn('Failed to reset player after error', err);
+      }
       return;
     }
 

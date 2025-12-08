@@ -9,10 +9,18 @@ import { Colors, TextColors, SurfaceColors, BorderColors, StatusColors, Spacing,
 import { SETTINGS_DEFAULTS, useSettings } from '@/context/settings-context';
 import { AppBackground } from '@/components/AppBackground';
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { YouTubeLoginModal } from '@/components/YouTubeLoginModal';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
 
 type GatewayStatus = 'checking' | 'online' | 'offline';
+
+type YouTubeCookiesStatus = {
+  hasCookies: boolean;
+  lastUpdated?: string;
+  ageHours?: number;
+  message: string;
+};
 
 export default function SettingsScreen() {
   const {
@@ -32,6 +40,8 @@ export default function SettingsScreen() {
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [localIdleTimeout, setLocalIdleTimeout] = useState(idleTimeout);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [youtubeCookiesStatus, setYoutubeCookiesStatus] = useState<YouTubeCookiesStatus | null>(null);
+  const [showYouTubeLogin, setShowYouTubeLogin] = useState(false);
   const rotation = useSharedValue(0);
 
   const animatedIconStyle = useAnimatedStyle(() => ({
@@ -72,8 +82,26 @@ export default function SettingsScreen() {
     }
   };
 
+  const checkYouTubeCookiesStatus = async () => {
+    if (!STREAM_BASE_URL) {
+      return;
+    }
+
+    try {
+      const response = await axios.get(`${STREAM_BASE_URL}/api/youtube-cookies/status`);
+      setYoutubeCookiesStatus(response.data);
+    } catch (error) {
+      console.warn('Failed to check YouTube cookies status', error);
+      setYoutubeCookiesStatus({
+        hasCookies: false,
+        message: 'Failed to check status'
+      });
+    }
+  };
+
   useEffect(() => {
     pingGateway();
+    checkYouTubeCookiesStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run only on mount
   }, []);
 
@@ -252,6 +280,59 @@ export default function SettingsScreen() {
         <BlurView intensity={20} tint="dark" style={styles.glassCard}>
           <View style={styles.cardContent}>
             <View style={styles.cardText}>
+              <Text style={styles.cardTitle}>YouTube 登录</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+                <View
+                  style={[
+                    styles.statusDot,
+                    youtubeCookiesStatus?.hasCookies ? styles.online : styles.offline,
+                  ]}
+                />
+                <Text style={styles.cardSubtitle}>
+                  {youtubeCookiesStatus?.hasCookies ? '已登录' : '未登录'}
+                </Text>
+              </View>
+              {youtubeCookiesStatus?.lastUpdated && (
+                <Text style={[styles.cardDescription, { fontSize: 12, marginTop: 4 }]}>
+                  更新于: {new Date(youtubeCookiesStatus.lastUpdated).toLocaleString('zh-CN')}
+                  {youtubeCookiesStatus.ageHours !== undefined && ` (${youtubeCookiesStatus.ageHours}小时前)`}
+                </Text>
+              )}
+              <Text style={styles.cardDescription}>
+                {youtubeCookiesStatus?.message || '用于绕过YouTube的bot检测。登录后可以正常播放视频。'}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable
+                onPress={checkYouTubeCookiesStatus}
+                style={styles.refreshButton}
+              >
+                <IconSymbol
+                  name="arrow.clockwise"
+                  size={20}
+                  color={TextColors.primary}
+                />
+              </Pressable>
+              <Pressable
+                onPress={() => setShowYouTubeLogin(true)}
+                style={[
+                  styles.refreshButton,
+                  { backgroundColor: youtubeCookiesStatus?.hasCookies ? SurfaceColors.hover : Colors.dark.tint }
+                ]}
+              >
+                <IconSymbol
+                  name={youtubeCookiesStatus?.hasCookies ? "checkmark.circle" : "person.circle"}
+                  size={20}
+                  color={TextColors.primary}
+                />
+              </Pressable>
+            </View>
+          </View>
+        </BlurView>
+
+        <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+          <View style={styles.cardContent}>
+            <View style={styles.cardText}>
               <Text style={styles.cardTitle}>显示歌曲封面</Text>
               <Text style={styles.cardSubtitle}>
                 {showBanner ? '开启' : '关闭'}
@@ -381,6 +462,13 @@ export default function SettingsScreen() {
           </View>
         </BlurView>
       </ScrollView>
+      <YouTubeLoginModal
+        visible={showYouTubeLogin}
+        onDismiss={() => setShowYouTubeLogin(false)}
+        onSuccess={() => {
+          checkYouTubeCookiesStatus();
+        }}
+      />
     </View>
   );
 }
