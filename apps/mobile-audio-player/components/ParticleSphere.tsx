@@ -161,18 +161,18 @@ export const ParticleSphere = ({ style }: ParticleSphereProps) => {
             const innerShift = Math.abs(Math.cos((elapsedTime + 2.5) / 20));
             const outerShift = Math.abs(Math.cos((elapsedTime + 5) / 10));
 
-            (starField.material as THREE.PointsMaterial).color.setHSL(Math.abs(Math.cos(elapsedTime / 10)), 1, 0.5);
+            (starField.material as any).color.setHSL(Math.abs(Math.cos(elapsedTime / 10)), 1, 0.5);
 
-            (sphereWireframeOuter.material as THREE.MeshLambertMaterial).color.setHSL(0, 1, outerShift);
-            (sphereGlassOuter.material as THREE.MeshPhongMaterial).color.setHSL(0, 1, outerShift);
-            (particlesOuter.material as THREE.PointsMaterial).color.setHSL(0, 1, outerShift);
+            (sphereWireframeOuter.material as any).color.setHSL(0, 1, outerShift);
+            (sphereGlassOuter.material as any).color.setHSL(0, 1, outerShift);
+            (particlesOuter.material as any).color.setHSL(0, 1, outerShift);
 
-            (sphereWireframeInner.material as THREE.MeshLambertMaterial).color.setHSL(0.08, 1, innerShift);
-            (particlesInner.material as THREE.PointsMaterial).color.setHSL(0.08, 1, innerShift);
-            (sphereGlassInner.material as THREE.MeshPhongMaterial).color.setHSL(0.08, 1, innerShift);
+            (sphereWireframeInner.material as any).color.setHSL(0.08, 1, innerShift);
+            (particlesInner.material as any).color.setHSL(0.08, 1, innerShift);
+            (sphereGlassInner.material as any).color.setHSL(0.08, 1, innerShift);
 
-            (sphereWireframeInner.material as THREE.MeshLambertMaterial).opacity = Math.abs(Math.cos((elapsedTime + 0.5) / 0.9) * 0.5);
-            (sphereWireframeOuter.material as THREE.MeshLambertMaterial).opacity = Math.abs(Math.cos(elapsedTime / 0.9) * 0.5);
+            (sphereWireframeInner.material as any).opacity = Math.abs(Math.cos((elapsedTime + 0.5) / 0.9) * 0.5);
+            (sphereWireframeOuter.material as any).opacity = Math.abs(Math.cos(elapsedTime / 0.9) * 0.5);
 
             directionalLight.position.x = Math.cos(elapsedTime / 0.5) * 128;
             directionalLight.position.y = Math.cos(elapsedTime / 0.5) * 128;

@@ -4,25 +4,39 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   View,
   Platform,
   FlatList,
-  BackHandler,
+  LogBox,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
-import { Audio, AVPlaybackStatus } from 'expo-av';
+import TrackPlayer, {
+  Capability,
+  Event,
+  RepeatMode,
+  State,
+  usePlaybackState,
+  useProgress,
+  useTrackPlayerEvents,
+  AppKilledPlaybackBehavior,
+  IOSCategory,
+  IOSCategoryMode,
+  IOSCategoryOptions,
+} from 'react-native-track-player';
 import axios from 'axios';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Image } from 'expo-image';
 import { IconButton, Text, Button, Card, useTheme, ActivityIndicator as PaperActivityIndicator, TextInput } from 'react-native-paper';
 import Animated, { useSharedValue, useAnimatedStyle, withSpring, withTiming, Easing, withRepeat } from 'react-native-reanimated';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { NestableDraggableFlatList, NestableScrollContainer, ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
+import DraggableFlatList, { ScaleDecorator, RenderItemParams } from 'react-native-draggable-flatlist';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BlurView } from 'expo-blur';
 
 import { useSettings } from '@/context/settings-context';
+import { useIdle } from '@/context/idle-context';
 import { TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
+import { AppBackground } from '@/components/AppBackground';
+import { GroupDetailModal } from '@/components/GroupDetailModal';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
 const KEEP_ALIVE_INTERVAL_MS = 10 * 60 * 1000;
@@ -64,7 +78,7 @@ type YouTubeSearchResult = {
 
 const PLAYER_STATE_COPY: Record<PlayerState, string> = {
   idle: '待命',
-  loading: '缓冲中',
+  loading: '缓冲/加载中...',
   playing: '播放中',
   paused: '已暂停',
   error: '错误'
@@ -115,22 +129,40 @@ const extractVideoId = (input: string): string | null => {
   return null;
 };
 
-import { AppBackground } from '@/components/AppBackground';
-import { BlurView } from 'expo-blur';
-import { GroupDetailModal } from '@/components/GroupDetailModal';
+// Suppress VirtualizedList nesting warning - safe in this context with fixed-height containers
+LogBox.ignoreLogs([
+  'VirtualizedLists should never be nested',
+]);
+
 
 export default function HomeScreen() {
-  const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout } = useSettings();
-  const isIdleShared = useSharedValue(0); // 0 = not idle, 1 = idle
+  const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout, showDebugConsole } = useSettings();
+  const { isIdleShared } = useIdle();
   const idleTimerRef = useRef<any>(null);
+  const [outerScrollEnabled, setOuterScrollEnabled] = useState(true);
   const [youtubeInput, setYoutubeInput] = useState('');
-  const [playerState, setPlayerState] = useState<PlayerState>('idle');
-  const [message, setMessage] = useState<string | null>(null);
+
+  const playbackState = usePlaybackState();
+  const progress = useProgress();
+  const [isPlayerReady, setIsPlayerReady] = useState(false);
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+
+  const addDebugLog = (msg: string) => {
+    setDebugLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev].slice(0, 20));
+  };
+
+  // Helper to map RNTP state to UI state
+  const playerState = (playbackState.state === State.Playing) ? 'playing'
+    : (playbackState.state === State.Paused || playbackState.state === State.Ready) ? 'paused'
+      : (playbackState.state === State.Buffering || playbackState.state === State.Loading) ? 'loading'
+        : 'idle';
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- only setter is used
+  const [_message, setMessage] = useState<string | null>(null);
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [loopEnabled, setLoopEnabled] = useState(false);
   const [groupLoopEnabled, setGroupLoopEnabled] = useState(true);
-  const [position, setPosition] = useState(0);
-  const [duration, setDuration] = useState(0);
+  // Remove manual position/duration state, use progress hook
   const [tracks, setTracks] = useState<TrackMetadata[]>([]);
   const [groups, setGroups] = useState<GroupMetadata[]>([]);
   const [tracksLoading, setTracksLoading] = useState(false);
@@ -144,7 +176,7 @@ export default function HomeScreen() {
   const [searchResults, setSearchResults] = useState<YouTubeSearchResult[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const soundRef = useRef<Audio.Sound | null>(null);
+
   const queueStateRef = useRef<{ queue: string[]; loop: boolean; index: number; groupId: string | null }>({
     queue: [],
     loop: false,
@@ -226,6 +258,7 @@ export default function HomeScreen() {
       scale.value = withTiming(0.8, { duration: 300, easing: Easing.out(Easing.quad) });
       rippleOpacity.value = withTiming(0);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Animation values are stable refs
   }, [playerState]);
 
   // Create a ref for the latest state so callbacks don't need to depend on them causing re-renders/loop
@@ -243,6 +276,7 @@ export default function HomeScreen() {
         isIdleShared.value = 1;
       }, idleTimeout * 1000);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isIdleShared is a stable ref
   }, []);
 
   const handleActivity = useCallback(() => {
@@ -284,7 +318,6 @@ export default function HomeScreen() {
   }, []);
 
   const animatedOpacityStyle = useAnimatedStyle(() => {
-    if (Platform.OS !== 'web') return { opacity: 1 };
     return {
       opacity: withTiming(isIdleShared.value === 1 ? 0 : 1, { duration: 500 }),
     };
@@ -293,20 +326,44 @@ export default function HomeScreen() {
   const parsedVideoId = useMemo(() => extractVideoId(youtubeInput), [youtubeInput]);
 
   useEffect(() => {
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      staysActiveInBackground: true,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true
-    }).catch((error) => {
-      console.warn('Failed to configure Audio mode', error);
-    });
-
-    return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync();
+    async function setup() {
+      try {
+        await TrackPlayer.setupPlayer({
+          iosCategory: IOSCategory.Playback,
+          iosCategoryMode: IOSCategoryMode.Default,
+          iosCategoryOptions: [
+            IOSCategoryOptions.AllowBluetooth,
+            IOSCategoryOptions.DefaultToSpeaker,
+            IOSCategoryOptions.InterruptSpokenAudioAndMixWithOthers
+          ],
+          autoHandleInterruptions: true,
+          autoUpdateMetadata: true,
+          waitForBuffer: true,
+        });
+        await TrackPlayer.updateOptions({
+          capabilities: [
+            Capability.Play,
+            Capability.Pause,
+            Capability.SkipToNext,
+            Capability.SkipToPrevious,
+            Capability.Stop,
+            Capability.SeekTo,
+          ],
+          compactCapabilities: [
+            Capability.Play,
+            Capability.Pause,
+            Capability.SkipToNext,
+          ],
+          progressUpdateEventInterval: 1,
+        });
+        setIsPlayerReady(true);
+      } catch (e) {
+        console.warn('TrackPlayer setup error:', e);
+        // Player might be already setup if hot reloading
+        setIsPlayerReady(true);
       }
-    };
+    }
+    setup();
   }, []);
 
   useEffect(() => {
@@ -337,7 +394,7 @@ export default function HomeScreen() {
     return () => {
       mounted = false;
     };
-  }, [STREAM_BASE_URL]);
+  }, []);
 
   const fetchTracks = useCallback(async () => {
     if (!STREAM_BASE_URL) {
@@ -431,30 +488,11 @@ export default function HomeScreen() {
     pingHealth();
     const keepAliveInterval = setInterval(pingHealth, KEEP_ALIVE_INTERVAL_MS);
     return () => clearInterval(keepAliveInterval);
-  }, [STREAM_BASE_URL, keepAliveEnabled]);
+  }, [keepAliveEnabled]);
 
-  useEffect(() => {
-    if (!isSeeking) {
-      setSeekValue(position);
-    }
-  }, [position, isSeeking]);
 
-  useEffect(() => {
-    if (duration <= 0) {
-      return;
-    }
-    setSeekValue((prev) => Math.min(prev, duration));
-  }, [duration]);
 
-  useEffect(() => {
-    if (!currentTrackId) {
-      return;
-    }
-    const metadata = tracks.find((track) => track.videoId === currentTrackId);
-    if (metadata?.durationSeconds) {
-      setDuration(metadata.durationSeconds * 1000);
-    }
-  }, [tracks, currentTrackId]);
+
 
   const clearQueue = useCallback(() => {
     queueStateRef.current = { queue: [], loop: false, index: 0, groupId: null };
@@ -462,31 +500,16 @@ export default function HomeScreen() {
   }, []);
 
   const unloadCurrentSound = useCallback(async () => {
-    if (!soundRef.current) {
-      return;
-    }
-
     try {
-      await soundRef.current.stopAsync();
+      await TrackPlayer.reset();
     } catch (error) {
-      console.warn('Unable to stop current sound cleanly', error);
+      console.warn('Unable to reset player', error);
     }
-
-    try {
-      await soundRef.current.unloadAsync();
-    } catch (error) {
-      console.warn('Unable to unload current sound', error);
-    }
-
-    soundRef.current = null;
   }, []);
 
   const stopPlayback = useCallback(async () => {
     await unloadCurrentSound();
     clearQueue();
-    setPlayerState('idle');
-    setPosition(0);
-    setDuration(0);
     setMessage(null);
     setCurrentTrackId(null);
     setSeekValue(0);
@@ -497,7 +520,7 @@ export default function HomeScreen() {
     const { queue, index, loop } = queueStateRef.current;
     if (!queue.length) {
       clearQueue();
-      setPlayerState('idle');
+      await TrackPlayer.reset();
       return;
     }
 
@@ -507,7 +530,7 @@ export default function HomeScreen() {
         nextIndex = 0;
       } else {
         clearQueue();
-        setPlayerState('idle');
+        await TrackPlayer.reset();
         setMessage('分组播放结束');
         return;
       }
@@ -525,26 +548,16 @@ export default function HomeScreen() {
   }, [clearQueue]);
 
   const handlePause = useCallback(async () => {
-    if (!soundRef.current) {
-      return;
-    }
-
     try {
-      await soundRef.current.pauseAsync();
-      setPlayerState('paused');
+      await TrackPlayer.pause();
     } catch (error) {
       console.warn('Unable to pause playback', error);
     }
   }, []);
 
   const handleResume = useCallback(async () => {
-    if (!soundRef.current) {
-      return;
-    }
-
     try {
-      await soundRef.current.playAsync();
-      setPlayerState('playing');
+      await TrackPlayer.play();
       setMessage(null);
     } catch (error) {
       console.warn('Unable to resume playback', error);
@@ -553,6 +566,9 @@ export default function HomeScreen() {
 
   const initiatePlayback = useCallback(
     async (videoId: string, options?: PlaybackOptions) => {
+      console.log('[initiatePlayback] Called with videoId:', videoId, 'options:', options, 'stack:', new Error().stack);
+      addDebugLog(`initiatePlayback: ${videoId}`);
+
       if (!videoId) {
         setMessage('请选择要播放的歌曲或输入链接');
         return;
@@ -563,7 +579,7 @@ export default function HomeScreen() {
         return;
       }
 
-      if (soundRef.current) {
+      if (playerState !== 'idle') {
         if (options?.fromQueue) {
           await unloadCurrentSound();
         } else {
@@ -575,93 +591,147 @@ export default function HomeScreen() {
         clearQueue();
       }
 
-      setPlayerState('loading');
       setMessage(null);
 
       if (!options?.fromQueue) {
         Keyboard.dismiss();
       }
 
-      const metadata = tracks.find((track) => track.videoId === videoId);
-      if (metadata?.durationSeconds) {
-        setDuration(metadata.durationSeconds * 1000);
-      } else {
-        setDuration(0);
-      }
-      setPosition(0);
       setSeekValue(0);
       setIsSeeking(false);
 
       try {
-        const source = {
-          uri: `${STREAM_BASE_URL}/stream/${encodeURIComponent(videoId)}`,
-        };
+        const metadata = tracks.find((track) => track.videoId === videoId);
 
-        const { sound } = await Audio.Sound.createAsync(
-          source,
-          { shouldPlay: true, isLooping: !options?.fromQueue && loopEnabled },
-          (status: AVPlaybackStatus) => {
-            if (!status.isLoaded) {
-              if ('error' in status && status.error) {
-                setPlayerState('error');
-                setMessage(`播放失败: ${status.error}`);
-              }
-              return;
-            }
+        // Allow playback even if metadata not cached yet - gateway will fetch and cache automatically
+        if (!metadata) {
+          addDebugLog('Metadata not cached, will fetch from gateway: ' + videoId);
+        }
 
-            setPosition(status.positionMillis ?? 0);
+        await TrackPlayer.reset();
+        await TrackPlayer.add({
+          id: videoId,
+          url: `${STREAM_BASE_URL}/stream/${encodeURIComponent(videoId)}`,
+          title: metadata?.title ?? videoId,
+          artist: metadata?.author ?? 'Unknown',
+          artwork: metadata?.thumbnailUrl ?? undefined,
+          duration: metadata?.durationSeconds ?? 0,
+        });
 
-            if (typeof status.durationMillis === 'number' && Number.isFinite(status.durationMillis)) {
-              setDuration(status.durationMillis);
-            }
+        // On mobile, we handle looping manually via PlaybackQueueEnded event (RepeatMode.Track is unreliable with streams)
+        // On web, use RepeatMode.Track as it works fine
+        const shouldLoop = !options?.fromQueue && loopEnabled;
+        const repeatMode = Platform.OS === 'web' && shouldLoop ? RepeatMode.Track : RepeatMode.Off;
+        await TrackPlayer.setRepeatMode(repeatMode);
+        addDebugLog(`Track added. Loop=${loopEnabled}, Platform=${Platform.OS}, RepeatMode=${repeatMode === RepeatMode.Track ? 'Track' : 'Off'}`);
 
-            if (status.didJustFinish && !status.isLooping) {
-              if (queueStateRef.current.queue.length) {
-                playNextInQueue();
-                return;
-              }
-              const handled = autoPlayLibraryTrack(videoId);
-              if (handled) {
-                return;
-              }
-              setPlayerState('idle');
-              setMessage('播放完成');
-              setPosition(0);
-              setSeekValue(0);
-              setIsSeeking(false);
-              clearQueue();
-            } else if (status.isPlaying) {
-              setPlayerState('playing');
-              setMessage(null);
-            } else {
-              setPlayerState('paused');
-            }
-          }
-        );
-
-        soundRef.current = sound;
+        await TrackPlayer.play();
         setCurrentTrackId(videoId);
+
+        // If this was a new track (not cached), refresh metadata after a delay
+        if (!metadata) {
+          setTimeout(() => {
+            fetchTracks().catch(err => console.warn('Failed to refresh tracks after playback', err));
+          }, 2000);
+        }
       } catch (error) {
         console.error('Unable to start playback', error);
-        setPlayerState('error');
+        addDebugLog(`Playback error: ${error}`);
         setMessage('播放失败，请稍后重试。');
       }
     },
     [
-      STREAM_BASE_URL,
       loopEnabled,
       stopPlayback,
-      unloadCurrentSound,
       clearQueue,
       playNextInQueue,
       tracks,
-      autoPlayLibraryTrack,
     ]
   );
+
+  // Handle queue completion manually via event since we are managing the queue state manually for now
+  useTrackPlayerEvents([Event.PlaybackQueueEnded, Event.PlaybackError, Event.PlaybackState, Event.PlaybackTrackChanged], async (event) => {
+    if (event.type === Event.PlaybackTrackChanged) {
+      addDebugLog(`TrackChanged: ${event.track?.id}, Index: ${event.index}, NextTrack: ${event.nextTrack?.id}`);
+      console.log('Track changed:', event);
+    }
+    if (event.type === Event.PlaybackError) {
+      console.warn('Playback Error:', event);
+      addDebugLog(`Error: ${event.message} (${event.code})`);
+      setMessage(`播放出错: ${event.message || '未知错误'}`);
+
+      // Stop playback on error to prevent infinite retries
+      try {
+        await TrackPlayer.reset();
+        setCurrentTrackId(null);
+        clearQueue();
+      } catch (err) {
+        console.warn('Failed to reset player after error', err);
+      }
+      return;
+    }
+
+    if (event.type === Event.PlaybackState) {
+      console.log('Playback State:', event.state);
+      addDebugLog(`State: ${event.state}`);
+    }
+
+    if (event.type === Event.PlaybackQueueEnded) {
+      addDebugLog(`QueueEnded (Loop: ${loopEnabled})`);
+      console.log('Queue ended. Loop:', loopEnabled, 'Queue:', queueStateRef.current.queue.length);
+
+      // Handle group queue playback
+      if (queueStateRef.current.queue.length) {
+        playNextInQueue();
+        return;
+      }
+
+      // For single track loop on mobile, we need to fully reset and re-add the track
+      // seekTo(0) doesn't work reliably with streaming URLs on mobile
+      if (loopEnabled && currentTrackId) {
+        console.log('Looping single track - doing full reset');
+        addDebugLog('Looping: Reloading track...');
+
+        const metadata = tracks.find((track) => track.videoId === currentTrackId);
+        if (metadata) {
+          try {
+            await TrackPlayer.reset();
+            await TrackPlayer.add({
+              id: currentTrackId,
+              url: `${STREAM_BASE_URL}/stream/${encodeURIComponent(currentTrackId)}`,
+              title: metadata.title,
+              artist: metadata.author,
+              artwork: metadata.thumbnailUrl ?? undefined,
+              duration: metadata.durationSeconds ?? 0,
+            });
+            await TrackPlayer.play();
+            addDebugLog('Looping: Track reloaded and playing');
+          } catch (error) {
+            console.error('Failed to loop track', error);
+            addDebugLog(`Loop error: ${error}`);
+          }
+        }
+        return;
+      }
+
+      // Track finished and no loop enabled
+      if (!loopEnabled) {
+        setMessage('播放完成');
+        setCurrentTrackId(null);
+        clearQueue();
+
+        // Auto-play next track from library if available
+        autoPlayLibraryTrack(currentTrackId);
+      }
+    }
+  });
 
   useEffect(() => {
     initiatePlaybackRef.current = initiatePlayback;
   }, [initiatePlayback]);
+
+  // Note: We rely on PlaybackQueueEnded event for looping, not progress monitoring
+  // Progress monitoring was causing false triggers (restarting in middle of playback)
 
   const handlePlay = async () => {
     if (!parsedVideoId) {
@@ -674,12 +744,17 @@ export default function HomeScreen() {
 
   const handleLoopToggle = async (value: boolean) => {
     setLoopEnabled(value);
-    if (soundRef.current) {
-      try {
-        await soundRef.current.setIsLoopingAsync(value);
-      } catch (error) {
-        console.warn('Unable to toggle loop', error);
-      }
+    addDebugLog(`Loop toggle: ${value} (platform: ${Platform.OS})`);
+    try {
+      // On mobile, we handle looping manually, so don't set RepeatMode.Track
+      const repeatMode = Platform.OS === 'web' && value ? RepeatMode.Track : RepeatMode.Off;
+      await TrackPlayer.setRepeatMode(repeatMode);
+      const currentMode = await TrackPlayer.getRepeatMode();
+      addDebugLog(`RepeatMode: ${currentMode} (mobile uses PlaybackQueueEnded event)`);
+      console.log('Repeat mode changed to:', currentMode, 'Platform:', Platform.OS);
+    } catch (error) {
+      console.warn('Unable to toggle loop', error);
+      addDebugLog(`Loop toggle error: ${error}`);
     }
   };
 
@@ -801,7 +876,7 @@ export default function HomeScreen() {
     } finally {
       setSearchLoading(false);
     }
-  }, [STREAM_BASE_URL]);
+  }, []);
 
   const handlePrimaryAction = useCallback(async () => {
     const trimmed = youtubeInput.trim();
@@ -820,7 +895,7 @@ export default function HomeScreen() {
 
   const handleSearchResultSelect = useCallback(
     async (result: YouTubeSearchResult) => {
-      if (soundRef.current) {
+      if (playerState !== 'idle') {
         await stopPlayback();
       }
 
@@ -858,7 +933,7 @@ export default function HomeScreen() {
         setMessage('删除曲目失败');
       }
     },
-    [STREAM_BASE_URL, fetchGroups, fetchTracks, stopPlayback, currentTrackId]
+    [fetchGroups, fetchTracks, stopPlayback, currentTrackId]
   );
 
   const handleGroupPlayback = useCallback(
@@ -886,23 +961,27 @@ export default function HomeScreen() {
     [groups, groupLoopEnabled, initiatePlayback]
   );
 
-  const sliderMax = duration > 0 ? duration : 1;
-  const displayedPosition = isSeeking ? seekValue : position;
-  const sliderValue = duration > 0 ? Math.min(displayedPosition, sliderMax) : 0;
+  const sliderMax = progress.duration > 0 ? progress.duration * 1000 : 1;
+  const displayedPosition = isSeeking ? seekValue : progress.position * 1000;
+  const sliderValue = progress.duration > 0 ? Math.min(displayedPosition, sliderMax) : 0;
 
   const currentTrack = tracks.find((t) => t.videoId === currentTrackId);
-
-  const ScrollComponent = (Platform.OS === 'web' ? ScrollView : NestableScrollContainer) as React.ComponentType<any>;
 
   return (
     <View
       style={{ flex: 1, backgroundColor: 'black' }}
       onTouchStart={handleActivity}
     >
-      <AppBackground style={{ position: 'absolute', width: '100%', height: '100%' }} />
+      <AppBackground
+        style={{ position: 'absolute', width: '100%', height: '100%' }}
+      />
       <Animated.View style={[{ flex: 1 }, animatedOpacityStyle]}>
         <View style={styles.container}>
-          <ScrollComponent style={{ flex: 1 }} contentContainerStyle={styles.content}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={styles.content}
+            scrollEnabled={outerScrollEnabled}
+          >
             <Text variant="headlineMedium" style={[styles.heading, { color: TextColors.primary }]}>
               Kingsley Player
             </Text>
@@ -1021,44 +1100,48 @@ export default function HomeScreen() {
                   </View>
                 )}
 
-                <View style={styles.controls}>
-                  <IconButton
-                    icon="play"
-                    mode="contained"
-                    containerColor={theme.colors.primary}
-                    iconColor={theme.colors.onPrimary}
-                    size={40}
-                    onPress={playerState === 'paused' ? handleResume : handlePlay}
-                    disabled={!parsedVideoId || playerState === 'loading'}
-                  />
-                  <IconButton
-                    icon="pause"
-                    mode="contained-tonal"
-                    size={32}
-                    onPress={handlePause}
-                    disabled={playerState !== 'playing'}
-                  />
-                  <IconButton
-                    icon="stop"
-                    mode="outlined"
-                    size={32}
-                    onPress={stopPlayback}
-                    disabled={playerState === 'idle'}
-                  />
-                  <IconButton
-                    icon={loopEnabled ? "repeat-once" : "repeat-off"}
-                    mode={loopEnabled ? "contained" : "outlined"}
-                    containerColor={loopEnabled ? theme.colors.primary : undefined}
-                    iconColor={loopEnabled ? theme.colors.onPrimary : undefined}
-                    size={32}
-                    onPress={() => handleLoopToggle(!loopEnabled)}
-                    disabled={playerState === 'idle'}
-                  />
-                </View>
+                {playerState !== 'idle' && (
+                  <View style={styles.controls}>
+                    <IconButton
+                      icon="play"
+                      mode="contained"
+                      containerColor={theme.colors.primary}
+                      iconColor={theme.colors.onPrimary}
+                      size={Platform.OS === 'web' ? 40 : 32}
+                      onPress={playerState === 'paused' ? handleResume : handlePlay}
+                      disabled={!parsedVideoId}
+                    />
+                    <IconButton
+                      icon="pause"
+                      mode="contained-tonal"
+                      size={Platform.OS === 'web' ? 32 : 28}
+                      onPress={handlePause}
+                      disabled={playerState !== 'playing' && playerState !== 'loading'}
+                    />
+                    <IconButton
+                      icon="stop"
+                      mode="outlined"
+                      size={Platform.OS === 'web' ? 32 : 28}
+                      onPress={stopPlayback}
+                      disabled={playerState === 'idle'}
+                    />
+                    <IconButton
+                      icon={loopEnabled ? "repeat-once" : "repeat-off"}
+                      mode={loopEnabled ? "contained" : "outlined"}
+                      containerColor={loopEnabled ? theme.colors.primary : undefined}
+                      iconColor={loopEnabled ? theme.colors.onPrimary : undefined}
+                      size={Platform.OS === 'web' ? 32 : 28}
+                      onPress={() => handleLoopToggle(!loopEnabled)}
+                      disabled={playerState === 'idle'}
+                    />
+                  </View>
+                )}
 
-                <Text variant="labelSmall" style={{ textAlign: 'center', marginTop: 10 }}>
-                  {PLAYER_STATE_COPY[playerState]}
-                </Text>
+                {playerState !== 'idle' && (
+                  <Text variant="labelSmall" style={{ textAlign: 'center', marginTop: 10 }}>
+                    {PLAYER_STATE_COPY[playerState]}
+                  </Text>
+                )}
 
                 {playerState !== 'idle' && (
                   <View style={styles.sliderContainer}>
@@ -1070,7 +1153,7 @@ export default function HomeScreen() {
                       minimumTrackTintColor={theme.colors.primary}
                       maximumTrackTintColor={theme.colors.surfaceVariant}
                       thumbTintColor={theme.colors.primary}
-                      disabled={duration <= 0}
+                      disabled={progress.duration <= 0}
                       onSlidingStart={(value) => {
                         setIsSeeking(true);
                         setSeekValue(value ?? 0);
@@ -1085,23 +1168,30 @@ export default function HomeScreen() {
                         const nextValue = value ?? 0;
                         setIsSeeking(false);
                         setSeekValue(nextValue);
-                        setPosition(nextValue);
-                        if (soundRef.current) {
-                          try {
-                            await soundRef.current.setPositionAsync(nextValue);
-                          } catch (error) {
-                            console.warn('Unable to seek playback', error);
-                          }
+                        try {
+                          await TrackPlayer.seekTo(nextValue / 1000);
+                        } catch (error) {
+                          console.warn('Unable to seek playback', error);
                         }
                       }}
                     />
                     <View style={styles.timeRow}>
                       <Text variant="labelSmall" style={{ color: TextColors.primary }}>{formatTime(displayedPosition)}</Text>
-                      <Text variant="labelSmall" style={{ color: TextColors.primary }}>{duration > 0 ? formatTime(duration) : '--:--'}</Text>
+                      <Text variant="labelSmall" style={{ color: TextColors.primary }}>{progress.duration > 0 ? formatTime(progress.duration * 1000) : '--:--'}</Text>
                     </View>
                   </View>
                 )}
 
+
+                {/* Debug Logs Section */}
+                {showDebugConsole && (
+                  <View style={{ marginTop: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 8 }}>
+                    <Text style={{ color: 'white', fontWeight: 'bold', marginBottom: 5 }}>Debug Console:</Text>
+                    {debugLogs.map((log, i) => (
+                      <Text key={i} style={{ color: '#ccc', fontSize: 10 }}>{log}</Text>
+                    ))}
+                  </View>
+                )}
               </View>
             </BlurView>
 
@@ -1120,6 +1210,8 @@ export default function HomeScreen() {
                     <View style={{ height: 400 }}>
                       <FlatList
                         data={tracks}
+                        scrollEnabled={true}
+                        nestedScrollEnabled
                         keyExtractor={(item) => item.videoId}
                         renderItem={({ item }) => {
                           const selected = selectedTrackIds.includes(item.videoId);
@@ -1143,46 +1235,52 @@ export default function HomeScreen() {
                       />
                     </View>
                   ) : (
-                    <NestableDraggableFlatList
-                      data={tracks}
-                      style={{ maxHeight: 600 }}
-                      onDragEnd={async ({ data }) => {
-                        setTracks(data);
-                        try {
-                          const order = data.map(t => t.videoId);
-                          await AsyncStorage.setItem(TRACK_ORDER_KEY, JSON.stringify(order));
-                        } catch (e) {
-                          console.warn('Failed to save track order', e);
-                        }
-                      }}
-                      keyExtractor={(item) => item.videoId}
-                      renderItem={({ item, drag, isActive }: RenderItemParams<TrackMetadata>) => {
-                        const selected = selectedTrackIds.includes(item.videoId);
-                        const playing = currentTrackId === item.videoId;
-                        return (
-                          <ScaleDecorator>
-                            <Pressable onLongPress={drag} disabled={isActive} delayLongPress={200}>
-                              <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }, isActive && { opacity: 0.7, backgroundColor: 'rgba(255,255,255,0.1)' }]}>
-                                <Card.Content style={styles.trackItemContent}>
-                                  <View style={{ flex: 1 }}>
-                                    <Text variant="titleSmall" numberOfLines={1} style={{ color: TextColors.primary }}>{item.title}</Text>
-                                    <Text variant="bodySmall" style={{ color: TextColors.secondary }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
-                                  </View>
-                                  <View style={styles.trackActions}>
-                                    <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
-                                    <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(item.videoId)} />
-                                    <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(item.videoId)} />
-                                    <Pressable onLongPress={drag} delayLongPress={0} disabled={isActive} hitSlop={20} style={{ padding: 8 }}>
-                                      <MaterialCommunityIcons name="drag" size={24} color="rgba(255,255,255,0.5)" />
-                                    </Pressable>
-                                  </View>
-                                </Card.Content>
-                              </Card>
-                            </Pressable>
-                          </ScaleDecorator>
-                        );
-                      }}
-                    />
+                    <View style={{ height: 450 }}>
+                      <DraggableFlatList
+                        data={tracks}
+                        scrollEnabled={true}
+                        nestedScrollEnabled
+                        onDragBegin={() => setOuterScrollEnabled(false)}
+                        onRelease={() => setOuterScrollEnabled(true)}
+                        onDragEnd={async ({ data }) => {
+                          setTracks(data);
+                          setOuterScrollEnabled(true);
+                          try {
+                            const order = data.map(t => t.videoId);
+                            await AsyncStorage.setItem(TRACK_ORDER_KEY, JSON.stringify(order));
+                          } catch (e) {
+                            console.warn('Failed to save track order', e);
+                          }
+                        }}
+                        keyExtractor={(item) => item.videoId}
+                        renderItem={({ item, drag, isActive }: RenderItemParams<TrackMetadata>) => {
+                          const selected = selectedTrackIds.includes(item.videoId);
+                          const playing = currentTrackId === item.videoId;
+                          return (
+                            <ScaleDecorator>
+                              <Pressable onLongPress={drag} disabled={isActive} delayLongPress={200}>
+                                <Card mode="contained" style={[styles.trackItem, playing && { borderColor: theme.colors.primary, borderWidth: 1 }, isActive && { opacity: 0.7, backgroundColor: 'rgba(255,255,255,0.1)' }]}>
+                                  <Card.Content style={styles.trackItemContent}>
+                                    <View style={{ flex: 1 }}>
+                                      <Text variant="titleSmall" numberOfLines={1} style={{ color: TextColors.primary }}>{item.title}</Text>
+                                      <Text variant="bodySmall" style={{ color: TextColors.secondary }}>{item.author} · {formatDuration(item.durationSeconds)}</Text>
+                                    </View>
+                                    <View style={styles.trackActions}>
+                                      <IconButton icon="play-circle" size={20} iconColor="white" onPress={() => handleTrackPlay(item.videoId)} />
+                                      <IconButton icon={selected ? "check-circle" : "circle-outline"} size={20} iconColor="white" onPress={() => toggleTrackSelection(item.videoId)} />
+                                      <IconButton icon="delete" size={20} iconColor="white" onPress={() => handleDeleteTrack(item.videoId)} />
+                                      <Pressable onLongPress={drag} delayLongPress={0} disabled={isActive} hitSlop={20} style={{ padding: 8 }}>
+                                        <MaterialCommunityIcons name="drag" size={24} color="rgba(255,255,255,0.5)" />
+                                      </Pressable>
+                                    </View>
+                                  </Card.Content>
+                                </Card>
+                              </Pressable>
+                            </ScaleDecorator>
+                          );
+                        }}
+                      />
+                    </View>
                   )
                 )}
                 <Text style={styles.hint}>Selected: {selectedTrackIds.length}</Text>
@@ -1255,7 +1353,7 @@ export default function HomeScreen() {
                 </ScrollView>
               </View>
             </BlurView>
-          </ScrollComponent>
+          </ScrollView>
         </View >
         <GroupDetailModal
           visible={!!viewingGroup}
@@ -1278,7 +1376,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    padding: 20,
+    padding: Platform.OS === 'web' ? 20 : 16,
     paddingBottom: 100,
   },
   heading: {
@@ -1290,7 +1388,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 3,
   },
   sectionTitle: {
-    fontSize: 20,
+    fontSize: Platform.OS === 'web' ? 20 : 18,
     fontWeight: 'bold',
     color: TextColors.primary,
     textShadowColor: 'rgba(0, 0, 0, 0.75)',
@@ -1302,7 +1400,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 20, // Increased padding to prevent clipping
+    paddingTop: Platform.OS === 'web' ? 20 : 12, // Increased padding to prevent clipping
     paddingBottom: 8,
   },
   subtitle: {
@@ -1403,7 +1501,7 @@ const styles = StyleSheet.create({
     backgroundColor: SurfaceColors.card,
   },
   cardContent: {
-    padding: Spacing.xxl,
+    padding: Platform.OS === 'web' ? Spacing.xxl : Spacing.lg,
     backgroundColor: 'transparent',
   },
   trackInfoContainer: {
@@ -1414,7 +1512,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: Spacing.xl,
+    gap: Platform.OS === 'web' ? Spacing.xl : Spacing.md,
     marginBottom: Spacing.xl,
   },
   sliderContainer: {

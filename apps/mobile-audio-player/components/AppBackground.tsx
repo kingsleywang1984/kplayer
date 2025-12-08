@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
+import { View, StyleSheet, ViewStyle, StyleProp, Platform } from 'react-native';
 import { Galaxy3D } from '@/components/Galaxy3D';
 import { RainbowZappers } from '@/components/RainbowZappers';
 import { ParticleSphere } from '@/components/ParticleSphere';

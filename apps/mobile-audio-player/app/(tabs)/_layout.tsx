@@ -1,16 +1,35 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
+import Animated, { useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { BottomTabBar } from '@react-navigation/bottom-tabs';
 
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useIdle } from '@/context/idle-context';
+
+function AnimatedTabBar(props: BottomTabBarProps) {
+  const { isIdleShared } = useIdle();
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: withTiming(isIdleShared.value === 1 ? 0 : 1, { duration: 500 }),
+  }));
+
+  return (
+    <Animated.View style={[animatedStyle, { position: 'absolute', bottom: 0, left: 0, right: 0 }]}>
+      <BottomTabBar {...props} />
+    </Animated.View>
+  );
+}
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
 
   return (
     <Tabs
+      tabBar={(props) => <AnimatedTabBar {...props} />}
       screenOptions={{
         tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,

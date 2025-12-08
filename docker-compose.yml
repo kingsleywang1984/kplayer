@@ -16,7 +16,8 @@ services:
     ports:
       - "3333:3333"
     environment:
-      - EXPO_PUBLIC_API_BASE_URL=http://audio-stream-gateway:3000
+      # - EXPO_PUBLIC_API_BASE_URL=http://audio-stream-gateway:3000
+      - EXPO_PUBLIC_STREAM_BASE_URL=http://localhost:3000
     volumes:
       # 挂载源代码，实现热更新
       - ./apps/mobile-audio-player/app:/app/apps/mobile-audio-player/app

@@ -1,9 +1,9 @@
 
 import React, { useState, useMemo } from 'react';
-import { View, ScrollView, StyleSheet, FlatList } from 'react-native';
-import { Modal, Portal, Text, Button, IconButton, useTheme, Card, Divider, FAB } from 'react-native-paper';
+import { View, StyleSheet, FlatList } from 'react-native';
+import { Modal, Portal, Text, Button, IconButton, useTheme, Card, Divider } from 'react-native-paper';
 import { BlurView } from 'expo-blur';
-import { TextColors, SurfaceColors, BorderColors, Spacing, BorderRadius } from '@/constants/theme';
+import { TextColors, SurfaceColors, BorderColors, Spacing } from '@/constants/theme';
 
 type TrackMetadata = {
     videoId: string;

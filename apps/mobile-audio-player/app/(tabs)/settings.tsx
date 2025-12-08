@@ -1,16 +1,26 @@
-import { ScrollView, StyleSheet, Switch, Text, View, Pressable, TextInput, Platform } from 'react-native';
+import { ScrollView, StyleSheet, Switch, Text, View, Pressable, Platform } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { BlurView } from 'expo-blur';
 import { useEffect, useState } from 'react';
 import axios from 'axios';
+import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, Easing, cancelAnimation } from 'react-native-reanimated';
 
 import { Colors, TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
 import { SETTINGS_DEFAULTS, useSettings } from '@/context/settings-context';
 import { AppBackground } from '@/components/AppBackground';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { YouTubeLoginModal } from '@/components/YouTubeLoginModal';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
 
 type GatewayStatus = 'checking' | 'online' | 'offline';
+
+type YouTubeCookiesStatus = {
+  hasCookies: boolean;
+  lastUpdated?: string;
+  ageHours?: number;
+  message: string;
+};
 
 export default function SettingsScreen() {
   const {
@@ -24,41 +34,75 @@ export default function SettingsScreen() {
     setShowBanner,
     idleTimeout,
     setIdleTimeout,
+    showDebugConsole,
+    setShowDebugConsole,
   } = useSettings();
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [localIdleTimeout, setLocalIdleTimeout] = useState(idleTimeout);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [youtubeCookiesStatus, setYoutubeCookiesStatus] = useState<YouTubeCookiesStatus | null>(null);
+  const [showYouTubeLogin, setShowYouTubeLogin] = useState(false);
+  const rotation = useSharedValue(0);
+
+  const animatedIconStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotation.value}deg` }],
+  }));
 
   useEffect(() => {
     setLocalIdleTimeout(idleTimeout);
   }, [idleTimeout]);
 
-  useEffect(() => {
-    let mounted = true;
-
-    async function pingGateway() {
-      if (!STREAM_BASE_URL) {
-        setGatewayStatus('offline');
-        return;
-      }
-
-      try {
-        await axios.get(`${STREAM_BASE_URL}/healthz`, { timeout: 4000 });
-        if (mounted) {
-          setGatewayStatus('online');
-        }
-      } catch (error) {
-        console.warn('Gateway health check failed', error);
-        if (mounted) {
-          setGatewayStatus('offline');
-        }
-      }
+  const pingGateway = async () => {
+    if (!STREAM_BASE_URL) {
+      setGatewayStatus('offline');
+      return;
     }
 
-    pingGateway();
+    setGatewayStatus('checking');
+    setIsRefreshing(true);
 
-    return () => {
-      mounted = false;
-    };
+    // Start rotation animation
+    rotation.value = withRepeat(
+      withTiming(360, { duration: 1000, easing: Easing.linear }),
+      -1, // infinite
+      false
+    );
+
+    try {
+      await axios.get(`${STREAM_BASE_URL}/healthz`, { timeout: 4000 });
+      setGatewayStatus('online');
+    } catch (error) {
+      console.warn('Gateway health check failed', error);
+      setGatewayStatus('offline');
+    } finally {
+      // Stop rotation animation
+      cancelAnimation(rotation);
+      rotation.value = 0;
+      setIsRefreshing(false);
+    }
+  };
+
+  const checkYouTubeCookiesStatus = async () => {
+    if (!STREAM_BASE_URL) {
+      return;
+    }
+
+    try {
+      const response = await axios.get(`${STREAM_BASE_URL}/api/youtube-cookies/status`);
+      setYoutubeCookiesStatus(response.data);
+    } catch (error) {
+      console.warn('Failed to check YouTube cookies status', error);
+      setYoutubeCookiesStatus({
+        hasCookies: false,
+        message: 'Failed to check status'
+      });
+    }
+  };
+
+  useEffect(() => {
+    pingGateway();
+    checkYouTubeCookiesStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run only on mount
   }, []);
 
   return (
@@ -214,6 +258,75 @@ export default function SettingsScreen() {
                 显示后端服务的连接状态。
               </Text>
             </View>
+            <Pressable
+              onPress={pingGateway}
+              disabled={isRefreshing}
+              style={[
+                styles.refreshButton,
+                isRefreshing && styles.refreshButtonDisabled,
+              ]}
+            >
+              <Animated.View style={animatedIconStyle}>
+                <IconSymbol
+                  name="arrow.clockwise"
+                  size={20}
+                  color={isRefreshing ? TextColors.muted : TextColors.primary}
+                />
+              </Animated.View>
+            </Pressable>
+          </View>
+        </BlurView>
+
+        <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+          <View style={styles.cardContent}>
+            <View style={styles.cardText}>
+              <Text style={styles.cardTitle}>YouTube 登录</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+                <View
+                  style={[
+                    styles.statusDot,
+                    youtubeCookiesStatus?.hasCookies ? styles.online : styles.offline,
+                  ]}
+                />
+                <Text style={styles.cardSubtitle}>
+                  {youtubeCookiesStatus?.hasCookies ? '已登录' : '未登录'}
+                </Text>
+              </View>
+              {youtubeCookiesStatus?.lastUpdated && (
+                <Text style={[styles.cardDescription, { fontSize: 12, marginTop: 4 }]}>
+                  更新于: {new Date(youtubeCookiesStatus.lastUpdated).toLocaleString('zh-CN')}
+                  {youtubeCookiesStatus.ageHours !== undefined && ` (${youtubeCookiesStatus.ageHours}小时前)`}
+                </Text>
+              )}
+              <Text style={styles.cardDescription}>
+                {youtubeCookiesStatus?.message || '用于绕过YouTube的bot检测。登录后可以正常播放视频。'}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable
+                onPress={checkYouTubeCookiesStatus}
+                style={styles.refreshButton}
+              >
+                <IconSymbol
+                  name="arrow.clockwise"
+                  size={20}
+                  color={TextColors.primary}
+                />
+              </Pressable>
+              <Pressable
+                onPress={() => setShowYouTubeLogin(true)}
+                style={[
+                  styles.refreshButton,
+                  { backgroundColor: youtubeCookiesStatus?.hasCookies ? SurfaceColors.hover : Colors.dark.tint }
+                ]}
+              >
+                <IconSymbol
+                  name={youtubeCookiesStatus?.hasCookies ? "checkmark.circle" : "person.circle"}
+                  size={20}
+                  color={TextColors.primary}
+                />
+              </Pressable>
+            </View>
           </View>
         </BlurView>
 
@@ -231,6 +344,25 @@ export default function SettingsScreen() {
             <Switch
               value={showBanner}
               onValueChange={setShowBanner}
+              trackColor={{ true: Colors.dark.tint, false: '#5f6368' }}
+            />
+          </View>
+        </BlurView>
+
+        <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+          <View style={styles.cardContent}>
+            <View style={styles.cardText}>
+              <Text style={styles.cardTitle}>显示 Debug Console</Text>
+              <Text style={styles.cardSubtitle}>
+                {showDebugConsole ? '开启' : '关闭'}
+              </Text>
+              <Text style={styles.cardDescription}>
+                是否显示调试控制台，用于开发和调试。
+              </Text>
+            </View>
+            <Switch
+              value={showDebugConsole}
+              onValueChange={setShowDebugConsole}
               trackColor={{ true: Colors.dark.tint, false: '#5f6368' }}
             />
           </View>
@@ -330,6 +462,13 @@ export default function SettingsScreen() {
           </View>
         </BlurView>
       </ScrollView>
+      <YouTubeLoginModal
+        visible={showYouTubeLogin}
+        onDismiss={() => setShowYouTubeLogin(false)}
+        onSuccess={() => {
+          checkYouTubeCookiesStatus();
+        }}
+      />
     </View>
   );
 }
@@ -429,5 +568,16 @@ const styles = StyleSheet.create({
   },
   modeButtonTextActive: {
     color: TextColors.primary,
+  },
+  refreshButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: SurfaceColors.hover,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refreshButtonDisabled: {
+    opacity: 0.7,
   },
 });
