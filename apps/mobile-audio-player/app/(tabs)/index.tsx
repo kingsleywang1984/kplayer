@@ -130,7 +130,7 @@ const extractVideoId = (input: string): string | null => {
 
 
 export default function HomeScreen() {
-  const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout } = useSettings();
+  const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout, showDebugConsole } = useSettings();
   const isIdleShared = useSharedValue(0); // 0 = not idle, 1 = idle
   const idleTimerRef = useRef<any>(null);
   const [outerScrollEnabled, setOuterScrollEnabled] = useState(true);
@@ -1156,13 +1156,16 @@ export default function HomeScreen() {
                   </View>
                 )}
 
+
                 {/* Debug Logs Section */}
-                <View style={{ marginTop: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 8 }}>
-                  <Text style={{ color: 'white', fontWeight: 'bold', marginBottom: 5 }}>Debug Console:</Text>
-                  {debugLogs.map((log, i) => (
-                    <Text key={i} style={{ color: '#ccc', fontSize: 10 }}>{log}</Text>
-                  ))}
-                </View>
+                {showDebugConsole && (
+                  <View style={{ marginTop: 20, padding: 10, backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 8 }}>
+                    <Text style={{ color: 'white', fontWeight: 'bold', marginBottom: 5 }}>Debug Console:</Text>
+                    {debugLogs.map((log, i) => (
+                      <Text key={i} style={{ color: '#ccc', fontSize: 10 }}>{log}</Text>
+                    ))}
+                  </View>
+                )}
               </View>
             </BlurView>
 

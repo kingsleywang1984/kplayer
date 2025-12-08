@@ -26,6 +26,8 @@ export default function SettingsScreen() {
     setShowBanner,
     idleTimeout,
     setIdleTimeout,
+    showDebugConsole,
+    setShowDebugConsole,
   } = useSettings();
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [localIdleTimeout, setLocalIdleTimeout] = useState(idleTimeout);
@@ -261,6 +263,25 @@ export default function SettingsScreen() {
             <Switch
               value={showBanner}
               onValueChange={setShowBanner}
+              trackColor={{ true: Colors.dark.tint, false: '#5f6368' }}
+            />
+          </View>
+        </BlurView>
+
+        <BlurView intensity={20} tint="dark" style={styles.glassCard}>
+          <View style={styles.cardContent}>
+            <View style={styles.cardText}>
+              <Text style={styles.cardTitle}>显示 Debug Console</Text>
+              <Text style={styles.cardSubtitle}>
+                {showDebugConsole ? '开启' : '关闭'}
+              </Text>
+              <Text style={styles.cardDescription}>
+                是否显示调试控制台，用于开发和调试。
+              </Text>
+            </View>
+            <Switch
+              value={showDebugConsole}
+              onValueChange={setShowDebugConsole}
               trackColor={{ true: Colors.dark.tint, false: '#5f6368' }}
             />
           </View>

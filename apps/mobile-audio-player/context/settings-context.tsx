@@ -40,6 +40,8 @@ type SettingsContextValue = {
   setShowBanner: (value: boolean) => void;
   idleTimeout: number;
   setIdleTimeout: (value: number) => void;
+  showDebugConsole: boolean;
+  setShowDebugConsole: (value: boolean) => void;
 };
 
 const SettingsContext = createContext<SettingsContextValue | undefined>(undefined);
@@ -48,8 +50,9 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(DEFAULT_AUTO_REFRESH_ENABLED);
   const [keepAliveEnabled, setKeepAliveEnabled] = useState(DEFAULT_KEEP_ALIVE_ENABLED);
   const [backgroundMode, setBackgroundMode] = useState<BackgroundMode>('galaxy');
-  const [showBanner, setShowBanner] = useState(true);
-  const [idleTimeout, setIdleTimeout] = useState(0);
+  const [showBanner, setShowBanner] = useState(false);
+  const [idleTimeout, setIdleTimeout] = useState(30);
+  const [showDebugConsole, setShowDebugConsole] = useState(false);
 
   const value = useMemo(
     () => ({
@@ -63,8 +66,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setShowBanner,
       idleTimeout,
       setIdleTimeout,
+      showDebugConsole,
+      setShowDebugConsole,
     }),
-    [autoRefreshEnabled, keepAliveEnabled, backgroundMode, showBanner, idleTimeout]
+    [autoRefreshEnabled, keepAliveEnabled, backgroundMode, showBanner, idleTimeout, showDebugConsole]
   );
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
@@ -82,7 +87,9 @@ export const SETTINGS_DEFAULTS = {
   autoRefreshEnabled: DEFAULT_AUTO_REFRESH_ENABLED,
   keepAliveEnabled: DEFAULT_KEEP_ALIVE_ENABLED,
   backgroundMode: 'galaxy' as BackgroundMode,
-  idleTimeout: 0,
+  showBanner: false,
+  idleTimeout: 30,
+  showDebugConsole: false,
 };
 
 export type BackgroundMode = 'galaxy' | 'pure_black' | 'rainbow_zappers' | 'particle_sphere' | 'tunnel_animation' | 'wormhole';
