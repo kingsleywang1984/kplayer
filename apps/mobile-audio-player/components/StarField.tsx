@@ -39,6 +39,7 @@ const Star: React.FC<StarProps> = ({ x, y, size, delay, duration }) => {
                 true // reverse
             )
         );
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- opacity is a stable ref
     }, [delay, duration]);
 
     return (

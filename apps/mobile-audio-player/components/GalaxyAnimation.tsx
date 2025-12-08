@@ -102,6 +102,7 @@ const Star = ({ particle }: { particle: Particle }) => {
                 true
             )
         );
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- Animation values are stable refs, particle props are stable
     }, []);
 
     const animatedStyle = useAnimatedStyle(() => ({
@@ -140,6 +141,7 @@ export const GalaxyAnimation = () => {
             }),
             -1
         );
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- rotation is a stable ref
     }, []);
 
     const animatedStyle = useAnimatedStyle(() => {

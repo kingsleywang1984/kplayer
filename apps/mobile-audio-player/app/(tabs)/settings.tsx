@@ -1,12 +1,14 @@
-import { ScrollView, StyleSheet, Switch, Text, View, Pressable, TextInput, Platform } from 'react-native';
+import { ScrollView, StyleSheet, Switch, Text, View, Pressable, Platform } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { BlurView } from 'expo-blur';
 import { useEffect, useState } from 'react';
 import axios from 'axios';
+import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, Easing, cancelAnimation } from 'react-native-reanimated';
 
 import { Colors, TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
 import { SETTINGS_DEFAULTS, useSettings } from '@/context/settings-context';
 import { AppBackground } from '@/components/AppBackground';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
 
@@ -27,38 +29,50 @@ export default function SettingsScreen() {
   } = useSettings();
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [localIdleTimeout, setLocalIdleTimeout] = useState(idleTimeout);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const rotation = useSharedValue(0);
+
+  const animatedIconStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${rotation.value}deg` }],
+  }));
 
   useEffect(() => {
     setLocalIdleTimeout(idleTimeout);
   }, [idleTimeout]);
 
-  useEffect(() => {
-    let mounted = true;
-
-    async function pingGateway() {
-      if (!STREAM_BASE_URL) {
-        setGatewayStatus('offline');
-        return;
-      }
-
-      try {
-        await axios.get(`${STREAM_BASE_URL}/healthz`, { timeout: 4000 });
-        if (mounted) {
-          setGatewayStatus('online');
-        }
-      } catch (error) {
-        console.warn('Gateway health check failed', error);
-        if (mounted) {
-          setGatewayStatus('offline');
-        }
-      }
+  const pingGateway = async () => {
+    if (!STREAM_BASE_URL) {
+      setGatewayStatus('offline');
+      return;
     }
 
-    pingGateway();
+    setGatewayStatus('checking');
+    setIsRefreshing(true);
 
-    return () => {
-      mounted = false;
-    };
+    // Start rotation animation
+    rotation.value = withRepeat(
+      withTiming(360, { duration: 1000, easing: Easing.linear }),
+      -1, // infinite
+      false
+    );
+
+    try {
+      await axios.get(`${STREAM_BASE_URL}/healthz`, { timeout: 4000 });
+      setGatewayStatus('online');
+    } catch (error) {
+      console.warn('Gateway health check failed', error);
+      setGatewayStatus('offline');
+    } finally {
+      // Stop rotation animation
+      cancelAnimation(rotation);
+      rotation.value = 0;
+      setIsRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    pingGateway();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally run only on mount
   }, []);
 
   return (
@@ -214,6 +228,22 @@ export default function SettingsScreen() {
                 显示后端服务的连接状态。
               </Text>
             </View>
+            <Pressable
+              onPress={pingGateway}
+              disabled={isRefreshing}
+              style={[
+                styles.refreshButton,
+                isRefreshing && styles.refreshButtonDisabled,
+              ]}
+            >
+              <Animated.View style={animatedIconStyle}>
+                <IconSymbol
+                  name="arrow.clockwise"
+                  size={20}
+                  color={isRefreshing ? TextColors.muted : TextColors.primary}
+                />
+              </Animated.View>
+            </Pressable>
           </View>
         </BlurView>
 
@@ -429,5 +459,16 @@ const styles = StyleSheet.create({
   },
   modeButtonTextActive: {
     color: TextColors.primary,
+  },
+  refreshButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: SurfaceColors.hover,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  refreshButtonDisabled: {
+    opacity: 0.7,
   },
 });
