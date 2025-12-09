@@ -373,6 +373,13 @@ app.get('/stream/:videoId', async (req, res, next) => {
         .audioBitrate(128)
         .format('mp3')
         .on('error', (error) => {
+          // "Output stream closed" means the stream finished successfully
+          // This is not a fatal error - the upload likely completed
+          if (error.message && error.message.includes('Output stream closed')) {
+            console.log(`[Cache] Stream closed for ${videoId} (upload likely completed)`);
+            return;
+          }
+
           console.error(`[Cache] Transcode failed for ${videoId}`, error);
           hasError = true;
           cachingJobs.delete(videoId);

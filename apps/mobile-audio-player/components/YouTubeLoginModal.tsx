@@ -1,5 +1,9 @@
-import { Modal, StyleSheet, View, Platform } from 'react-native';
+import { useState } from 'react';
+import { Modal, StyleSheet, View } from 'react-native';
 import { Button, Text } from 'react-native-paper';
+import WebView from 'react-native-webview';
+import CookieManager from '@react-native-cookies/cookies';
+import axios from 'axios';
 
 import { TextColors, SurfaceColors, BorderRadius, Spacing } from '@/constants/theme';
 
@@ -12,101 +16,116 @@ interface YouTubeLoginModalProps {
 }
 
 export function YouTubeLoginModal({ visible, onDismiss, onSuccess }: YouTubeLoginModalProps) {
-  const loginScript = `(async function() {
-  const cookies = document.cookie.split('; ');
-  const domain = '.youtube.com';
-  const path = '/';
-  const expires = Math.floor(Date.now() / 1000) + (365 * 24 * 60 * 60);
-  const netscapeCookies = cookies.map(pair => {
-    const [name, value] = pair.split('=');
-    return \`\${domain}\\tTRUE\\t\${path}\\tFALSE\\t\${expires}\\t\${name}\\t\${value}\`;
-  }).join('\\n');
-  const cookieData = '# Netscape HTTP Cookie File\\n' + netscapeCookies;
-  const response = await fetch('${STREAM_BASE_URL}/api/youtube-cookies', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ cookies: cookieData })
-  });
-  const result = await response.json();
-  console.log('✅', result);
-  alert('✅ Cookies saved! You can close this tab.');
-})();`;
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [webViewKey, setWebViewKey] = useState(0);
 
-  const handleCopyScript = () => {
-    if (Platform.OS === 'web') {
-      navigator.clipboard.writeText(loginScript);
-      alert('✅ Script copied!\n\nNow:\n1. Open YouTube.com in a new tab\n2. Login to YouTube\n3. Press F12 → Console\n4. Paste & press Enter\n5. Refresh Settings to see status');
-    } else {
-      alert('Mobile YouTube login is not available.\n\nPlease use the web version on a desktop browser.\n\nCookies are stored on the server, so once you login on web, mobile will work automatically.');
+  const handleExtractCookies = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      console.log('[YouTubeLogin] Extracting cookies using CookieManager...');
+
+      // Get all cookies for YouTube domain (including HttpOnly cookies)
+      const allCookies = await CookieManager.get('https://www.youtube.com', true);
+      console.log('[YouTubeLogin] Retrieved cookies:', Object.keys(allCookies || {}).length, 'cookies');
+
+      if (!allCookies || Object.keys(allCookies).length === 0) {
+        setError('No cookies found. Make sure you are logged in to YouTube.');
+        setLoading(false);
+        return;
+      }
+
+      // Convert cookies to Netscape format (yt-dlp compatible)
+      const now = Math.floor(Date.now() / 1000);
+      const netscapeCookies = Object.entries(allCookies).map(([name, cookie]: [string, any]) => {
+        const domain = cookie.domain || '.youtube.com';
+        const path = cookie.path || '/';
+        const secure = cookie.secure ? 'TRUE' : 'FALSE';
+        const expires = cookie.expires
+          ? (typeof cookie.expires === 'string'
+              ? Math.floor(new Date(cookie.expires).getTime() / 1000)
+              : cookie.expires)
+          : now + (365 * 24 * 60 * 60); // 1 year default
+        const value = cookie.value || '';
+
+        // Netscape format: domain, flag, path, secure, expiration, name, value
+        return `${domain}\tTRUE\t${path}\t${secure}\t${expires}\t${name}\t${value}`;
+      }).join('\n');
+
+      const cookieData = '# Netscape HTTP Cookie File\n' + netscapeCookies;
+      console.log('[YouTubeLogin] Cookie data length:', cookieData.length);
+      console.log('[YouTubeLogin] Sending to:', `${STREAM_BASE_URL}/api/youtube-cookies`);
+
+      // Send cookies to Gateway
+      const response = await axios.post(`${STREAM_BASE_URL}/api/youtube-cookies`, {
+        cookies: cookieData
+      });
+
+      console.log('[YouTubeLogin] Cookies sent successfully:', response.data);
+      setLoading(false);
+      onSuccess();
+      onDismiss();
+    } catch (err: any) {
+      console.error('[YouTubeLogin] Failed:', err);
+      console.error('[YouTubeLogin] Error details:', err.message, err.response?.data);
+      setError(`Failed: ${err.message || 'Unknown error'}. Check console for details.`);
+      setLoading(false);
     }
   };
 
-  const handleOpenYouTube = () => {
-    if (Platform.OS === 'web') {
-      window.open('https://www.youtube.com', '_blank');
-      handleCopyScript();
-    } else {
-      alert('Please open this app in a desktop web browser to login to YouTube.\n\nThe cookies will sync automatically to your mobile app.');
-    }
+  const handleRetry = () => {
+    setError(null);
+    setWebViewKey(prev => prev + 1); // Force WebView reload
   };
 
   return (
-    <Modal visible={visible} onRequestClose={onDismiss} transparent animationType="slide">
-      <View style={styles.modalOverlay}>
-        <View style={[styles.modalContent, { maxWidth: 600 }]}>
-          <Text variant="titleLarge" style={styles.title}>YouTube Login</Text>
+    <Modal visible={visible} onRequestClose={onDismiss} animationType="slide">
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Text variant="titleLarge" style={styles.headerTitle}>Login to YouTube</Text>
+          <Button mode="text" onPress={onDismiss} disabled={loading}>
+            Cancel
+          </Button>
+        </View>
 
-          {Platform.OS === 'web' ? (
-            <>
-              <Text variant="bodyMedium" style={[styles.message, { marginTop: 16 }]}>
-                Simple 3-step process:
-              </Text>
+        {error && (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{error}</Text>
+            <Button mode="outlined" onPress={handleRetry} style={{ marginTop: 8 }}>
+              Retry
+            </Button>
+          </View>
+        )}
 
-              <View style={{ marginVertical: 16, gap: 8 }}>
-                <Text style={styles.message}>1️⃣ Click "Open YouTube & Copy Script"</Text>
-                <Text style={styles.message}>2️⃣ Login to YouTube (if not already)</Text>
-                <Text style={styles.message}>3️⃣ Press F12 → Console → Paste → Enter</Text>
-              </View>
+        <View style={styles.webViewContainer}>
+          <WebView
+            key={webViewKey}
+            source={{ uri: 'https://www.youtube.com' }}
+            style={styles.webView}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            sharedCookiesEnabled={true}
+            thirdPartyCookiesEnabled={true}
+          />
+        </View>
 
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
-                <Button mode="outlined" onPress={onDismiss}>
-                  Cancel
-                </Button>
-                <Button mode="contained" onPress={handleOpenYouTube}>
-                  Open YouTube & Copy Script
-                </Button>
-              </View>
-
-              <Text variant="bodySmall" style={[styles.message, { marginTop: 16, fontSize: 12, opacity: 0.7 }]}>
-                After running the script, refresh Settings to see login status.
-              </Text>
-            </>
-          ) : (
-            <>
-              <Text variant="bodyMedium" style={[styles.message, { marginTop: 16 }]}>
-                Mobile login is not supported. Please use a desktop browser.
-              </Text>
-
-              <View style={{ marginVertical: 16, gap: 8 }}>
-                <Text style={styles.message}>1️⃣ Open this app in a desktop web browser</Text>
-                <Text style={styles.message}>2️⃣ Go to Settings → YouTube Login</Text>
-                <Text style={styles.message}>3️⃣ Follow the instructions to login</Text>
-              </View>
-
-              <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
-                <Button mode="outlined" onPress={onDismiss}>
-                  OK
-                </Button>
-                <Button mode="contained" onPress={handleCopyScript}>
-                  Show Instructions
-                </Button>
-              </View>
-
-              <Text variant="bodySmall" style={[styles.message, { marginTop: 16, fontSize: 12, opacity: 0.7 }]}>
-                Cookies are stored on the server and will work on all devices once configured.
-              </Text>
-            </>
-          )}
+        <View style={styles.footer}>
+          <Text variant="bodySmall" style={styles.instructions}>
+            1. Login to your YouTube account{'\n'}
+            2. Once logged in, tap "Extract Cookies" below{'\n'}
+            3. Cookies will be saved automatically
+          </Text>
+          <Button
+            mode="contained"
+            onPress={handleExtractCookies}
+            disabled={loading}
+            loading={loading}
+            style={styles.extractButton}
+          >
+            {loading ? 'Extracting...' : 'Extract Cookies'}
+          </Button>
         </View>
       </View>
     </Modal>
@@ -114,24 +133,54 @@ export function YouTubeLoginModal({ visible, onDismiss, onSuccess }: YouTubeLogi
 }
 
 const styles = StyleSheet.create({
-  modalOverlay: {
+  container: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    justifyContent: 'center',
+    backgroundColor: 'black',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-  },
-  modalContent: {
+    padding: Spacing.lg,
+    paddingTop: Spacing.xl + 20,
     backgroundColor: SurfaceColors.card,
-    borderRadius: BorderRadius.lg,
-    padding: Spacing.xl,
-    marginHorizontal: Spacing.xl,
-    maxWidth: 400,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
   },
-  message: {
-    color: TextColors.secondary,
-    marginTop: Spacing.md,
-  },
-  title: {
+  headerTitle: {
     color: TextColors.primary,
+  },
+  webViewContainer: {
+    flex: 1,
+  },
+  webView: {
+    flex: 1,
+  },
+  footer: {
+    padding: Spacing.lg,
+    backgroundColor: SurfaceColors.card,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  instructions: {
+    color: TextColors.secondary,
+    marginBottom: Spacing.md,
+    lineHeight: 20,
+  },
+  extractButton: {
+    marginTop: Spacing.sm,
+  },
+  errorContainer: {
+    backgroundColor: 'rgba(255, 0, 0, 0.1)',
+    padding: Spacing.md,
+    marginHorizontal: Spacing.lg,
+    marginVertical: Spacing.sm,
+    borderRadius: BorderRadius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 0, 0, 0.3)',
+  },
+  errorText: {
+    color: '#ff6b6b',
+    textAlign: 'center',
   },
 });

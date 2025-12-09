@@ -7,6 +7,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, Eas
 
 import { Colors, TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
 import { SETTINGS_DEFAULTS, useSettings } from '@/context/settings-context';
+import { useIdle } from '@/context/idle-context';
 import { AppBackground } from '@/components/AppBackground';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { YouTubeLoginModal } from '@/components/YouTubeLoginModal';
@@ -37,6 +38,7 @@ export default function SettingsScreen() {
     showDebugConsole,
     setShowDebugConsole,
   } = useSettings();
+  const { isIdleShared } = useIdle();
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [localIdleTimeout, setLocalIdleTimeout] = useState(idleTimeout);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -464,7 +466,11 @@ export default function SettingsScreen() {
       </ScrollView>
       <YouTubeLoginModal
         visible={showYouTubeLogin}
-        onDismiss={() => setShowYouTubeLogin(false)}
+        onDismiss={() => {
+          setShowYouTubeLogin(false);
+          // Reset idle state to ensure tab bar is visible when returning from modal
+          isIdleShared.value = 0;
+        }}
         onSuccess={() => {
           checkYouTubeCookiesStatus();
         }}
