@@ -5,6 +5,7 @@ const {
   PutObjectCommand,
   DeleteObjectCommand,
 } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { Upload } = require('@aws-sdk/lib-storage');
 const config = require('../config');
 
@@ -88,6 +89,15 @@ async function getFileStream(key) {
   });
   const result = await s3Client.send(command);
   return result.Body;
+}
+
+async function getSignedFileUrl(key, expiresIn = 3600) {
+  const command = new GetObjectCommand({
+    Bucket: config.r2.bucketName,
+    Key: key
+  });
+  const url = await getSignedUrl(s3Client, command, { expiresIn });
+  return url;
 }
 
 function uploadStream(key, bodyStream) {
@@ -188,6 +198,7 @@ async function deleteTrack(videoId) {
 module.exports = {
   checkFileExists,
   getFileStream,
+  getSignedFileUrl,
   uploadStream,
   saveTrackMetadata,
   getTrackMetadata,

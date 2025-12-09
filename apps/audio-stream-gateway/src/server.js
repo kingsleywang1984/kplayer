@@ -270,6 +270,9 @@ async function searchYouTubeSongs(query, maxResults = YOUTUBE_MAX_RESULTS) {
     .filter(Boolean);
 }
 
+// Track ongoing cache jobs to prevent duplicate downloads
+const cachingJobs = new Map();
+
 app.get('/stream/:videoId', async (req, res, next) => {
   const rawVideoId = req.params.videoId;
   const videoId = getVideoId(rawVideoId);
@@ -278,179 +281,152 @@ app.get('/stream/:videoId', async (req, res, next) => {
     return res.status(400).json({ message: 'Invalid video id' });
   }
 
-  const existingMetadata = await storage.getTrackMetadata(videoId);
-  let cacheKey = existingMetadata?.storageKey;
-  let objectExists = false;
-
-  if (cacheKey) {
-    objectExists = await storage.checkFileExists(cacheKey);
-  }
-
-  if (!objectExists) {
-    cacheKey = `audio/${videoId}.mp3`;
-    objectExists = await storage.checkFileExists(cacheKey);
-  }
-
-  res.setHeader('Content-Type', 'audio/mpeg');
-  res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Accept-Ranges', 'bytes');
-
   try {
+    const existingMetadata = await storage.getTrackMetadata(videoId);
+    let cacheKey = existingMetadata?.storageKey;
+    let objectExists = false;
+
+    if (cacheKey) {
+      objectExists = await storage.checkFileExists(cacheKey);
+    }
+
+    if (!objectExists) {
+      cacheKey = `audio/${videoId}.mp3`;
+      objectExists = await storage.checkFileExists(cacheKey);
+    }
+
     if (objectExists) {
-      console.log(`[Stream] Serving ${videoId} from cache`);
-      const cachedObject = await storage.getFileStream(cacheKey);
-
-      cachedObject.on('error', (error) => {
-        console.error(`[Stream] Cache read failed for ${videoId}`, error);
-        if (!res.headersSent) {
-          res.status(500).end();
-        } else {
-          res.destroy(error);
-        }
+      // Track is cached - return R2 signed URL
+      console.log(`[Stream] Serving ${videoId} from cache (R2 URL)`);
+      const signedUrl = await storage.getSignedFileUrl(cacheKey, 3600); // 1 hour expiry
+      return res.json({
+        cached: true,
+        url: signedUrl,
+        videoId,
+        metadata: existingMetadata
       });
-
-      return cachedObject.pipe(res);
     }
 
-    console.log(`[Stream] Cache miss for ${videoId}, fetching from YouTube`);
+    // Track is not cached - check if caching is already in progress
+    if (cachingJobs.has(videoId)) {
+      console.log(`[Stream] Cache job already in progress for ${videoId}`);
+      return res.status(202).json({
+        cached: false,
+        caching: true,
+        message: 'Caching in progress',
+        videoId
+      });
+    }
 
-    // Send response headers immediately to prevent client timeout
-    res.writeHead(200, {
-      'Content-Type': 'audio/mpeg',
-      'Transfer-Encoding': 'chunked',
-      'Cache-Control': 'no-cache',
-      'Accept-Ranges': 'none'
-    });
-    // Force flush headers to client immediately (don't wait for body data)
-    res.flushHeaders();
-    console.log(`[Stream] Headers flushed for ${videoId}`);
-
-    // Start download immediately without waiting for metadata (fetch metadata in background)
-    const objectKey = buildObjectKey(videoId, videoId); // Use videoId as title initially
+    // Start background caching job
+    console.log(`[Stream] Starting background cache job for ${videoId}`);
+    const objectKey = buildObjectKey(videoId, videoId);
     cacheKey = objectKey;
-    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const downloadArgs = buildYtDlpArgs([
-      '-f', 'bestaudio/best',
-      '-o', '-',
-      '--quiet',
-      '--no-warnings',
-      youtubeUrl
-    ]);
-    const ytDlp = spawn('yt-dlp', downloadArgs);
 
-    ytDlp.stderr.on('data', (data) => {
-      const message = data.toString();
-      if (message.trim()) {
-        console.warn(`[Stream] yt-dlp warning for ${videoId}: ${message.trim()}`);
-      }
+    // Mark job as in progress
+    cachingJobs.set(videoId, { startTime: Date.now(), cacheKey });
+
+    // Return 202 immediately - don't wait for caching to complete
+    res.status(202).json({
+      cached: false,
+      caching: true,
+      message: 'Started caching video',
+      videoId
     });
 
-    ytDlp.on('error', (error) => {
-      console.error(`[Stream] Failed to spawn yt-dlp for ${videoId}`, error);
-      if (!res.headersSent) {
-        res.status(502).json({ message: 'Unable to download from YouTube' });
-      } else {
-        res.destroy(error);
-      }
-    });
+    // Start background caching (async, won't be interrupted by client disconnect)
+    (async () => {
+      const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      const downloadArgs = buildYtDlpArgs([
+        '-f', 'bestaudio/best',
+        '-o', '-',
+        '--quiet',
+        '--no-warnings',
+        youtubeUrl
+      ]);
 
-    ytDlp.on('close', (code) => {
-      if (code !== 0) {
-        const error = new Error(`yt-dlp exited with code ${code}`);
-        console.error(`[Stream] yt-dlp exit error for ${videoId}`, error);
-        if (!res.headersSent) {
-          res.status(502).json({ message: 'Unable to download from YouTube' });
-        } else {
-          res.destroy(error);
+      const ytDlp = spawn('yt-dlp', downloadArgs);
+      let hasError = false;
+
+      ytDlp.stderr.on('data', (data) => {
+        const message = data.toString();
+        if (message.trim()) {
+          console.warn(`[Cache] yt-dlp warning for ${videoId}: ${message.trim()}`);
         }
-      }
-    });
-
-    const transcoder = ffmpeg(ytDlp.stdout)
-      .audioBitrate(128)
-      .format('mp3')
-      .on('error', (error) => {
-        console.error(`[Stream] Transcode failed for ${videoId}`, error);
-        if (!res.headersSent) {
-          res.status(500).json({ message: 'Unable to create audio stream' });
-        } else {
-          res.destroy(error);
-        }
-        ytDlp.kill('SIGKILL');
       });
 
-    const transcoderOutput = new PassThrough();
-    const responseStream = new PassThrough();
-    const cacheStream = new PassThrough();
+      ytDlp.on('error', (error) => {
+        console.error(`[Cache] Failed to spawn yt-dlp for ${videoId}`, error);
+        hasError = true;
+        cachingJobs.delete(videoId);
+      });
 
-    transcoder.pipe(transcoderOutput);
-    transcoderOutput.pipe(responseStream);
-    transcoderOutput.pipe(cacheStream);
+      ytDlp.on('close', (code) => {
+        if (code !== 0 && !hasError) {
+          console.error(`[Cache] yt-dlp exited with code ${code} for ${videoId}`);
+          hasError = true;
+          cachingJobs.delete(videoId);
+        }
+      });
 
-    // Fetch metadata in background (don't block streaming)
-    const metadataPromise = fetchVideoInfo(videoId)
-      .then(async (videoInfo) => {
-        const thumbnails = Array.isArray(videoInfo.thumbnails) ? videoInfo.thumbnails : [];
-        const thumbnailUrl = videoInfo.thumbnail ?? thumbnails[thumbnails.length - 1]?.url ?? null;
-        const metadataPayload = {
-          videoId,
-          storageKey: cacheKey,
-          title: videoInfo.title ?? videoId,
-          author: videoInfo.uploader ?? videoInfo.channel ?? 'Unknown artist',
-          durationSeconds: typeof videoInfo.duration === 'number' ? videoInfo.duration : null,
-          thumbnailUrl,
-          createdAt: new Date().toISOString(),
-        };
-        await storage.saveTrackMetadata(metadataPayload);
-        console.log(`[Stream] Metadata saved for ${videoId}`);
-      })
-      .catch((error) => {
-        console.error(`[Stream] Failed to fetch metadata for ${videoId}`, error);
-        // Save minimal metadata as fallback
-        return storage.saveTrackMetadata({
-          videoId,
-          storageKey: cacheKey,
-          title: videoId,
-          author: 'Unknown',
-          durationSeconds: null,
-          thumbnailUrl: null,
-          createdAt: new Date().toISOString(),
+      const transcoder = ffmpeg(ytDlp.stdout)
+        .audioBitrate(128)
+        .format('mp3')
+        .on('error', (error) => {
+          console.error(`[Cache] Transcode failed for ${videoId}`, error);
+          hasError = true;
+          cachingJobs.delete(videoId);
+          ytDlp.kill('SIGKILL');
         });
-      });
 
-    const uploadPromise = storage
-      .uploadStream(cacheKey, cacheStream)
-      .then(() => {
-        console.log(`[Stream] Cached ${videoId} in R2`);
-      })
-      .catch((error) => {
-        console.error(`[Stream] Failed to upload ${videoId} to R2`, error);
-      });
+      const transcoderOutput = new PassThrough();
+      const cacheStream = new PassThrough();
 
-    responseStream.on('error', (error) => {
-      console.error(`[Stream] Response stream error for ${videoId}`, error);
-      res.destroy(error);
-    });
+      transcoder.pipe(transcoderOutput);
+      transcoderOutput.pipe(cacheStream);
 
-    req.on('close', () => {
-      if (!res.writableEnded) {
-        console.log(`[Stream] Client disconnected; aborting ${videoId}`);
-        ytDlp.kill('SIGKILL');
-        if (typeof transcoder.kill === 'function') {
-          transcoder.kill('SIGKILL');
-        }
-        responseStream.destroy();
-        cacheStream.destroy();
+      // Fetch metadata in background
+      fetchVideoInfo(videoId)
+        .then(async (videoInfo) => {
+          const thumbnails = Array.isArray(videoInfo.thumbnails) ? videoInfo.thumbnails : [];
+          const thumbnailUrl = videoInfo.thumbnail ?? thumbnails[thumbnails.length - 1]?.url ?? null;
+          const metadataPayload = {
+            videoId,
+            storageKey: cacheKey,
+            title: videoInfo.title ?? videoId,
+            author: videoInfo.uploader ?? videoInfo.channel ?? 'Unknown artist',
+            durationSeconds: typeof videoInfo.duration === 'number' ? videoInfo.duration : null,
+            thumbnailUrl,
+            createdAt: new Date().toISOString(),
+          };
+          await storage.saveTrackMetadata(metadataPayload);
+          console.log(`[Cache] Metadata saved for ${videoId}`);
+        })
+        .catch((error) => {
+          console.error(`[Cache] Failed to fetch metadata for ${videoId}`, error);
+          // Save minimal metadata as fallback
+          return storage.saveTrackMetadata({
+            videoId,
+            storageKey: cacheKey,
+            title: videoId,
+            author: 'Unknown',
+            durationSeconds: null,
+            thumbnailUrl: null,
+            createdAt: new Date().toISOString(),
+          });
+        });
+
+      // Upload to R2
+      try {
+        await storage.uploadStream(cacheKey, cacheStream);
+        console.log(`[Cache] Successfully cached ${videoId} in R2`);
+        cachingJobs.delete(videoId);
+      } catch (error) {
+        console.error(`[Cache] Failed to upload ${videoId} to R2`, error);
+        cachingJobs.delete(videoId);
       }
-    });
+    })(); // Immediately invoke async function
 
-    responseStream.pipe(res);
-
-    try {
-      await uploadPromise;
-    } catch (error) {
-      console.error(`[Stream] Upload promise failed: ${videoId}`, error);
-    }
   } catch (error) {
     next(error);
   }

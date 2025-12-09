@@ -136,9 +136,10 @@ LogBox.ignoreLogs([
 
 
 export default function HomeScreen() {
-  const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout, showDebugConsole } = useSettings();
+  const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout, showDebugConsole, cachePollingInterval } = useSettings();
   const { isIdleShared } = useIdle();
   const idleTimerRef = useRef<any>(null);
+  const cachingPollIntervalRef = useRef<any>(null);
   const [outerScrollEnabled, setOuterScrollEnabled] = useState(true);
   const [youtubeInput, setYoutubeInput] = useState('');
 
@@ -159,6 +160,7 @@ export default function HomeScreen() {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- only setter is used
   const [_message, setMessage] = useState<string | null>(null);
+  const [cachingVideoId, setCachingVideoId] = useState<string | null>(null); // Track which video is being cached
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [loopEnabled, setLoopEnabled] = useState(false);
   const [groupLoopEnabled, setGroupLoopEnabled] = useState(true);
@@ -564,6 +566,46 @@ export default function HomeScreen() {
     }
   }, []);
 
+  // Request stream info from Gateway - returns either R2 URL (if cached) or 202 (if caching)
+  const requestStreamInfo = useCallback(async (videoId: string) => {
+    if (!STREAM_BASE_URL) {
+      throw new Error('Gateway URL not configured');
+    }
+
+    try {
+      const response = await axios.get(`${STREAM_BASE_URL}/stream/${encodeURIComponent(videoId)}`);
+
+      if (response.status === 200 && response.data.cached) {
+        // Track is cached - return R2 URL
+        addDebugLog(`Cache HIT for ${videoId}`);
+        return { cached: true, url: response.data.url, metadata: response.data.metadata };
+      }
+
+      if (response.status === 202 || (response.data && !response.data.cached)) {
+        // Track is being cached
+        addDebugLog(`Cache MISS for ${videoId} - caching started`);
+        return { cached: false, caching: true };
+      }
+
+      throw new Error('Unexpected response from stream endpoint');
+    } catch (error: any) {
+      if (error.response?.status === 202) {
+        addDebugLog(`Cache MISS for ${videoId} - caching started`);
+        return { cached: false, caching: true };
+      }
+      throw error;
+    }
+  }, [addDebugLog]);
+
+  // Stop cache polling
+  const stopCachePolling = useCallback(() => {
+    if (cachingPollIntervalRef.current) {
+      clearInterval(cachingPollIntervalRef.current);
+      cachingPollIntervalRef.current = null;
+    }
+    setCachingVideoId(null);
+  }, []);
+
   const initiatePlayback = useCallback(
     async (videoId: string, options?: PlaybackOptions) => {
       console.log('[initiatePlayback] Called with videoId:', videoId, 'options:', options, 'stack:', new Error().stack);
@@ -601,17 +643,22 @@ export default function HomeScreen() {
       setIsSeeking(false);
 
       try {
-        const metadata = tracks.find((track) => track.videoId === videoId);
+        // First, request stream info to check if track is cached
+        const streamInfo = await requestStreamInfo(videoId);
 
-        // Allow playback even if metadata not cached yet - gateway will fetch and cache automatically
-        if (!metadata) {
-          addDebugLog('Metadata not cached, will fetch from gateway: ' + videoId);
+        if (!streamInfo.cached) {
+          // Track is not cached - start polling for cache completion
+          startCachePolling(videoId);
+          return;
         }
+
+        // Track is cached - play from R2 URL
+        const metadata = tracks.find((track) => track.videoId === videoId) || streamInfo.metadata;
 
         await TrackPlayer.reset();
         await TrackPlayer.add({
           id: videoId,
-          url: `${STREAM_BASE_URL}/stream/${encodeURIComponent(videoId)}`,
+          url: streamInfo.url, // Use R2 signed URL
           title: metadata?.title ?? videoId,
           artist: metadata?.author ?? 'Unknown',
           artwork: metadata?.thumbnailUrl ?? undefined,
@@ -623,21 +670,17 @@ export default function HomeScreen() {
         const shouldLoop = !options?.fromQueue && loopEnabled;
         const repeatMode = Platform.OS === 'web' && shouldLoop ? RepeatMode.Track : RepeatMode.Off;
         await TrackPlayer.setRepeatMode(repeatMode);
-        addDebugLog(`Track added. Loop=${loopEnabled}, Platform=${Platform.OS}, RepeatMode=${repeatMode === RepeatMode.Track ? 'Track' : 'Off'}`);
+        addDebugLog(`Track added. Loop=${loopEnabled}, Platform=${Platform.OS}, RepeatMode=${repeatMode === RepeatMode.Track ? 'Track' : 'Off'}, URL=${streamInfo.url.substring(0, 50)}...`);
 
         await TrackPlayer.play();
         setCurrentTrackId(videoId);
 
-        // If this was a new track (not cached), refresh metadata after a delay
-        if (!metadata) {
-          setTimeout(() => {
-            fetchTracks().catch(err => console.warn('Failed to refresh tracks after playback', err));
-          }, 2000);
-        }
+        addDebugLog(`Playing from R2: ${videoId}`);
       } catch (error) {
         console.error('Unable to start playback', error);
         addDebugLog(`Playback error: ${error}`);
         setMessage('播放失败，请稍后重试。');
+        stopCachePolling(); // Stop polling if there was an error
       }
     },
     [
@@ -646,8 +689,60 @@ export default function HomeScreen() {
       clearQueue,
       playNextInQueue,
       tracks,
+      requestStreamInfo,
+      // startCachePolling is intentionally omitted to avoid circular dependency
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      stopCachePolling,
+      addDebugLog,
     ]
   );
+
+  // Start polling for cache completion
+  const startCachePolling = useCallback((videoId: string) => {
+    addDebugLog(`Starting cache polling for ${videoId} (interval: ${cachePollingInterval}s)`);
+    setCachingVideoId(videoId);
+    setMessage(`正在缓存音频... (${videoId})`);
+
+    // Clear any existing polling interval
+    if (cachingPollIntervalRef.current) {
+      clearInterval(cachingPollIntervalRef.current);
+    }
+
+    // Poll every N seconds to check if track is cached
+    cachingPollIntervalRef.current = setInterval(async () => {
+      try {
+        const cachedTracks = await axios.get(`${STREAM_BASE_URL}/tracks`);
+        const foundTrack = cachedTracks.data?.tracks?.find((t: TrackMetadata) => t.videoId === videoId);
+
+        if (foundTrack) {
+          addDebugLog(`Cache completed for ${videoId}`);
+          clearInterval(cachingPollIntervalRef.current);
+          cachingPollIntervalRef.current = null;
+          setCachingVideoId(null);
+          setMessage(null);
+
+          // Refresh tracks list
+          await fetchTracks();
+
+          // Now play the cached track
+          await initiatePlayback(videoId, { skipCacheCheck: true });
+        } else {
+          addDebugLog(`Still caching ${videoId}...`);
+        }
+      } catch (error) {
+        console.error('Failed to poll cache status', error);
+      }
+    }, cachePollingInterval * 1000);
+  }, [cachePollingInterval, addDebugLog, fetchTracks, initiatePlayback]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (cachingPollIntervalRef.current) {
+        clearInterval(cachingPollIntervalRef.current);
+      }
+    };
+  }, []);
 
   // Handle queue completion manually via event since we are managing the queue state manually for now
   useTrackPlayerEvents([Event.PlaybackQueueEnded, Event.PlaybackError, Event.PlaybackState, Event.PlaybackTrackChanged], async (event) => {
@@ -695,17 +790,25 @@ export default function HomeScreen() {
         const metadata = tracks.find((track) => track.videoId === currentTrackId);
         if (metadata) {
           try {
+            // Request stream info to get R2 URL (should be cached since we just played it)
+            const streamInfo = await requestStreamInfo(currentTrackId);
+
+            if (!streamInfo.cached) {
+              addDebugLog('Warning: Track not cached during loop, will wait for caching');
+              return;
+            }
+
             await TrackPlayer.reset();
             await TrackPlayer.add({
               id: currentTrackId,
-              url: `${STREAM_BASE_URL}/stream/${encodeURIComponent(currentTrackId)}`,
+              url: streamInfo.url, // Use R2 signed URL
               title: metadata.title,
               artist: metadata.author,
               artwork: metadata.thumbnailUrl ?? undefined,
               duration: metadata.durationSeconds ?? 0,
             });
             await TrackPlayer.play();
-            addDebugLog('Looping: Track reloaded and playing');
+            addDebugLog('Looping: Track reloaded and playing from R2');
           } catch (error) {
             console.error('Failed to loop track', error);
             addDebugLog(`Loop error: ${error}`);
