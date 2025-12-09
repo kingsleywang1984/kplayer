@@ -1110,6 +1110,7 @@ export default function HomeScreen() {
                     handlePrimaryAction();
                   }}
                   returnKeyType={parsedVideoId ? 'go' : 'search'}
+                  multiline={false}
                   style={styles.input}
                   textColor="white"
                   theme={{
@@ -1157,10 +1158,10 @@ export default function HomeScreen() {
                           contentFit="cover"
                         />
                         <View style={styles.searchInfo}>
-                          <Text variant="titleSmall" numberOfLines={1}>
+                          <Text variant="titleSmall" numberOfLines={1} style={{ color: TextColors.primary }}>
                             {result.title}
                           </Text>
-                          <Text variant="bodySmall" numberOfLines={1}>
+                          <Text variant="bodySmall" numberOfLines={1} style={{ color: TextColors.secondary }}>
                             {result.channelTitle ?? '未知频道'}
                           </Text>
                         </View>
@@ -1172,25 +1173,23 @@ export default function HomeScreen() {
                   </View>
                 )}
 
-                <View style={styles.albumContainer}>
-                  {playerState === 'loading' && (
-                    <Animated.View style={[styles.ripple, rippleStyle]} />
-                  )}
-                  {currentTrack && showBanner ? (
-                    currentTrack.thumbnailUrl ? (
-                      <Animated.Image
-                        source={{ uri: currentTrack.thumbnailUrl }}
-                        style={[styles.albumArt, animatedImageStyle]}
-                      />
-                    ) : (
-                      <View style={[styles.albumArt, { backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
-                    )
-                  ) : (
-                    <View style={[styles.albumArt, { overflow: 'hidden', backgroundColor: 'black' }]}>
-                      <AppBackground style={{ width: '100%', height: '100%' }} />
-                    </View>
-                  )}
-                </View>
+                {showBanner && (
+                  <View style={styles.albumContainer}>
+                    {playerState === 'loading' && (
+                      <Animated.View style={[styles.ripple, rippleStyle]} />
+                    )}
+                    {currentTrack ? (
+                      currentTrack.thumbnailUrl ? (
+                        <Animated.Image
+                          source={{ uri: currentTrack.thumbnailUrl }}
+                          style={[styles.albumArt, animatedImageStyle]}
+                        />
+                      ) : (
+                        <View style={[styles.albumArt, { backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
+                      )
+                    ) : null}
+                  </View>
+                )}
 
                 {currentTrack && showBanner && (
                   <View style={styles.trackInfoContainer}>
@@ -1203,20 +1202,33 @@ export default function HomeScreen() {
                   </View>
                 )}
 
-                {playerState !== 'idle' && (
+                {cachingVideoId && (
+                  <View style={styles.cachingIndicator}>
+                    <PaperActivityIndicator animating={true} size="large" color={theme.colors.primary} />
+                    <Text variant="titleMedium" style={{ color: TextColors.primary, marginTop: 12 }}>
+                      正在缓存音频...
+                    </Text>
+                    <Text variant="bodySmall" style={{ color: TextColors.secondary, marginTop: 4 }}>
+                      请稍候，首次播放需要下载并转码
+                    </Text>
+                  </View>
+                )}
+
+                {!cachingVideoId && (
                   <View style={styles.controls}>
                     <IconButton
                       icon="play"
                       mode="contained"
-                      containerColor={theme.colors.primary}
+                      containerColor={playerState === 'playing' || playerState === 'loading' ? theme.colors.surfaceVariant : theme.colors.primary}
                       iconColor={theme.colors.onPrimary}
                       size={Platform.OS === 'web' ? 40 : 32}
                       onPress={playerState === 'paused' ? handleResume : handlePlay}
-                      disabled={!parsedVideoId}
+                      disabled={!parsedVideoId || playerState === 'playing' || playerState === 'loading'}
                     />
                     <IconButton
                       icon="pause"
                       mode="contained-tonal"
+                      containerColor={playerState === 'playing' || playerState === 'loading' ? theme.colors.primary : theme.colors.surfaceVariant}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={handlePause}
                       disabled={playerState !== 'playing' && playerState !== 'loading'}
@@ -1224,15 +1236,16 @@ export default function HomeScreen() {
                     <IconButton
                       icon="stop"
                       mode="outlined"
+                      containerColor={playerState !== 'idle' ? theme.colors.errorContainer : undefined}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={stopPlayback}
                       disabled={playerState === 'idle'}
                     />
                     <IconButton
                       icon={loopEnabled ? "repeat-once" : "repeat-off"}
-                      mode={loopEnabled ? "contained" : "outlined"}
-                      containerColor={loopEnabled ? theme.colors.primary : undefined}
-                      iconColor={loopEnabled ? theme.colors.onPrimary : undefined}
+                      mode="contained"
+                      containerColor={loopEnabled ? theme.colors.primary : theme.colors.surfaceVariant}
+                      iconColor={loopEnabled ? theme.colors.onPrimary : theme.colors.onSurfaceVariant}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={() => handleLoopToggle(!loopEnabled)}
                       disabled={playerState === 'idle'}
@@ -1240,7 +1253,7 @@ export default function HomeScreen() {
                   </View>
                 )}
 
-                {playerState !== 'idle' && (
+                {playerState !== 'idle' && !cachingVideoId && (
                   <Text variant="labelSmall" style={{ textAlign: 'center', marginTop: 10 }}>
                     {PLAYER_STATE_COPY[playerState]}
                   </Text>
@@ -1616,6 +1629,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: Platform.OS === 'web' ? Spacing.xl : Spacing.md,
+    marginBottom: Spacing.xl,
+  },
+  cachingIndicator: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: Spacing.xl,
     marginBottom: Spacing.xl,
   },
   sliderContainer: {

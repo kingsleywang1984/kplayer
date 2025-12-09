@@ -448,12 +448,21 @@ app.post('/api/youtube-cookies', async (req, res) => {
       return res.status(400).json({ message: 'Invalid cookies format' });
     }
 
-    // Write cookies to file in Netscape format (yt-dlp compatible)
+    // Write cookies to local file in Netscape format (yt-dlp compatible)
     fs.writeFileSync(COOKIES_FILE_PATH, cookies, 'utf8');
-    console.log('[Cookies] YouTube cookies updated successfully');
+    console.log('[Cookies] YouTube cookies saved to local file');
+
+    // Also save to R2 for persistence across server restarts
+    try {
+      await storage.saveYouTubeCookies(cookies);
+      console.log('[Cookies] YouTube cookies saved to R2 for persistence');
+    } catch (r2Error) {
+      console.error('[Cookies] Failed to save cookies to R2', r2Error);
+      // Continue anyway - local file is saved
+    }
 
     res.json({
-      message: 'Cookies saved successfully',
+      message: 'Cookies saved successfully (local + R2)',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -496,6 +505,39 @@ app.use((err, _req, res, _next) => {
   return res.status(500).json({ message: 'Internal Server Error' });
 });
 
-app.listen(config.port, () => {
-  console.log(`Audio Stream Gateway listening on port ${config.port}`);
-});
+/**
+ * Load YouTube cookies from R2 if local file doesn't exist
+ * This ensures cookies persist across server restarts on ephemeral platforms like Render
+ */
+async function loadCookiesOnStartup() {
+  // Check if local cookies file exists
+  if (fs.existsSync(COOKIES_FILE_PATH)) {
+    console.log('[Startup] Local YouTube cookies file found');
+    return;
+  }
+
+  console.log('[Startup] No local cookies file found, checking R2...');
+
+  try {
+    const cookiesFromR2 = await storage.loadYouTubeCookies();
+
+    if (cookiesFromR2) {
+      // Write cookies from R2 to local file
+      fs.writeFileSync(COOKIES_FILE_PATH, cookiesFromR2, 'utf8');
+      console.log('[Startup] YouTube cookies restored from R2 to local file');
+    } else {
+      console.log('[Startup] No cookies found in R2. User will need to login.');
+    }
+  } catch (error) {
+    console.error('[Startup] Failed to load cookies from R2', error);
+  }
+}
+
+// Start server with cookie restoration
+(async () => {
+  await loadCookiesOnStartup();
+
+  app.listen(config.port, () => {
+    console.log(`Audio Stream Gateway listening on port ${config.port}`);
+  });
+})();

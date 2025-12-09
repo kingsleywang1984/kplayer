@@ -304,31 +304,19 @@ export default function SettingsScreen() {
                 {youtubeCookiesStatus?.message || '用于绕过YouTube的bot检测。登录后可以正常播放视频。'}
               </Text>
             </View>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Pressable
-                onPress={checkYouTubeCookiesStatus}
-                style={styles.refreshButton}
-              >
-                <IconSymbol
-                  name="arrow.clockwise"
-                  size={20}
-                  color={TextColors.primary}
-                />
-              </Pressable>
-              <Pressable
-                onPress={() => setShowYouTubeLogin(true)}
-                style={[
-                  styles.refreshButton,
-                  { backgroundColor: youtubeCookiesStatus?.hasCookies ? SurfaceColors.hover : Colors.dark.tint }
-                ]}
-              >
-                <IconSymbol
-                  name={youtubeCookiesStatus?.hasCookies ? "checkmark.circle" : "person.circle"}
-                  size={20}
-                  color={TextColors.primary}
-                />
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={youtubeCookiesStatus?.hasCookies ? checkYouTubeCookiesStatus : () => setShowYouTubeLogin(true)}
+              style={[
+                styles.refreshButton,
+                { backgroundColor: youtubeCookiesStatus?.hasCookies ? SurfaceColors.hover : Colors.dark.tint }
+              ]}
+            >
+              <IconSymbol
+                name={youtubeCookiesStatus?.hasCookies ? "arrow.clockwise" : "person.circle"}
+                size={20}
+                color={TextColors.primary}
+              />
+            </Pressable>
           </View>
         </BlurView>
 
