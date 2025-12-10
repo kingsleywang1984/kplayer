@@ -309,6 +309,20 @@ app.get('/stream/:videoId', async (req, res, next) => {
 
     // Track is not cached - check if caching is already in progress
     if (cachingJobs.has(videoId)) {
+      const job = cachingJobs.get(videoId);
+
+      // Check if caching failed with an error
+      if (job.error) {
+        console.log(`[Stream] Cache job failed for ${videoId}: ${job.error}`);
+        cachingJobs.delete(videoId); // Clean up failed job
+        return res.status(500).json({
+          cached: false,
+          caching: false,
+          error: job.error,
+          videoId
+        });
+      }
+
       console.log(`[Stream] Cache job already in progress for ${videoId}`);
       return res.status(202).json({
         cached: false,
@@ -358,14 +372,20 @@ app.get('/stream/:videoId', async (req, res, next) => {
       ytDlp.on('error', (error) => {
         console.error(`[Cache] Failed to spawn yt-dlp for ${videoId}`, error);
         hasError = true;
-        cachingJobs.delete(videoId);
+        const job = cachingJobs.get(videoId);
+        if (job) {
+          job.error = `Failed to start download: ${error.message}`;
+        }
       });
 
       ytDlp.on('close', (code) => {
         if (code !== 0 && !hasError) {
           console.error(`[Cache] yt-dlp exited with code ${code} for ${videoId}`);
           hasError = true;
-          cachingJobs.delete(videoId);
+          const job = cachingJobs.get(videoId);
+          if (job) {
+            job.error = `Download failed with exit code ${code}`;
+          }
         }
       });
 
@@ -382,7 +402,10 @@ app.get('/stream/:videoId', async (req, res, next) => {
 
           console.error(`[Cache] Transcode failed for ${videoId}`, error);
           hasError = true;
-          cachingJobs.delete(videoId);
+          const job = cachingJobs.get(videoId);
+          if (job) {
+            job.error = `Audio conversion failed: ${error.message}`;
+          }
           ytDlp.kill('SIGKILL');
         });
 
@@ -430,7 +453,10 @@ app.get('/stream/:videoId', async (req, res, next) => {
         cachingJobs.delete(videoId);
       } catch (error) {
         console.error(`[Cache] Failed to upload ${videoId} to R2`, error);
-        cachingJobs.delete(videoId);
+        const job = cachingJobs.get(videoId);
+        if (job) {
+          job.error = `Storage upload failed: ${error.message}`;
+        }
       }
     })(); // Immediately invoke async function
 

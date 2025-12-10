@@ -566,7 +566,7 @@ export default function HomeScreen() {
     }
   }, []);
 
-  // Request stream info from Gateway - returns either R2 URL (if cached) or 202 (if caching)
+  // Request stream info from Gateway - returns either R2 URL (if cached) or 202 (if caching) or error
   const requestStreamInfo = useCallback(async (videoId: string) => {
     if (!STREAM_BASE_URL) {
       throw new Error('Gateway URL not configured');
@@ -593,6 +593,13 @@ export default function HomeScreen() {
         addDebugLog(`Cache MISS for ${videoId} - caching started`);
         return { cached: false, caching: true };
       }
+
+      // Check if backend returned a caching error
+      if (error.response?.status === 500 && error.response?.data?.error) {
+        addDebugLog(`[ERROR] Cache failed for ${videoId}: ${error.response.data.error}`);
+        return { cached: false, caching: false, error: error.response.data.error };
+      }
+
       throw error;
     }
   }, [addDebugLog]);
@@ -708,9 +715,21 @@ export default function HomeScreen() {
       clearInterval(cachingPollIntervalRef.current);
     }
 
-    // Poll every N seconds to check if track is cached
+    // Poll every N seconds to check if track is cached or if caching failed
     cachingPollIntervalRef.current = setInterval(async () => {
       try {
+        // First check if caching has failed with an error
+        const streamInfo = await requestStreamInfo(videoId);
+
+        if (streamInfo.error) {
+          // Caching failed - stop polling and show error
+          addDebugLog(`[ERROR] Cache failed for ${videoId}: ${streamInfo.error}`);
+          stopCachePolling();
+          setMessage(`缓存失败: ${streamInfo.error}`);
+          return;
+        }
+
+        // Check if track is now cached
         const cachedTracks = await axios.get(`${STREAM_BASE_URL}/tracks`);
         const foundTrack = cachedTracks.data?.tracks?.find((t: TrackMetadata) => t.videoId === videoId);
 
@@ -733,7 +752,7 @@ export default function HomeScreen() {
         console.error('Failed to poll cache status', error);
       }
     }, cachePollingInterval * 1000);
-  }, [cachePollingInterval, addDebugLog, fetchTracks, initiatePlayback]);
+  }, [cachePollingInterval, addDebugLog, fetchTracks, initiatePlayback, requestStreamInfo, stopCachePolling]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -943,7 +962,7 @@ export default function HomeScreen() {
 
   const handleTrackPlay = useCallback(
     async (videoId: string) => {
-      setYoutubeInput(`https://www.youtube.com/watch?v=${videoId}`);
+      setYoutubeInput(''); // Clear search input when playing
       await initiatePlayback(videoId);
     },
     [initiatePlayback]
@@ -990,6 +1009,7 @@ export default function HomeScreen() {
 
     if (parsedVideoId) {
       await initiatePlayback(parsedVideoId);
+      setYoutubeInput(''); // Clear search input when playing
       return;
     }
 
@@ -1005,7 +1025,7 @@ export default function HomeScreen() {
       try {
         await initiatePlayback(result.videoId);
         setMessage(`正在播放：${result.title}`);
-        setYoutubeInput(`https://www.youtube.com/watch?v=${result.videoId}`);
+        setYoutubeInput(''); // Clear search input when playing
         setSearchResults([]);
         setSearchError(null);
       } catch (error) {
@@ -1173,12 +1193,12 @@ export default function HomeScreen() {
                   </View>
                 )}
 
-                {showBanner && (
+                {(showBanner || backgroundMode !== 'pure_black') && (
                   <View style={styles.albumContainer}>
                     {playerState === 'loading' && (
                       <Animated.View style={[styles.ripple, rippleStyle]} />
                     )}
-                    {currentTrack ? (
+                    {currentTrack && showBanner ? (
                       currentTrack.thumbnailUrl ? (
                         <Animated.Image
                           source={{ uri: currentTrack.thumbnailUrl }}
@@ -1187,7 +1207,11 @@ export default function HomeScreen() {
                       ) : (
                         <View style={[styles.albumArt, { backgroundColor: 'rgba(255, 255, 255, 0.1)' }]} />
                       )
-                    ) : null}
+                    ) : (
+                      <View style={[styles.albumArt, { overflow: 'hidden', backgroundColor: 'black' }]}>
+                        <AppBackground style={{ width: '100%', height: '100%' }} />
+                      </View>
+                    )}
                   </View>
                 )}
 
