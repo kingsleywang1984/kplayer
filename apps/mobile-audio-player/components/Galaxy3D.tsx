@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { GLView } from 'expo-gl';
 import { Renderer } from 'expo-three';
@@ -9,6 +9,20 @@ interface Galaxy3DProps {
 }
 
 export const Galaxy3D = ({ style }: Galaxy3DProps) => {
+  const animationFrameIdRef = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (animationFrameIdRef.current !== null) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
+      }
+    };
+  }, []);
+
   const onContextCreate = async (gl: any) => {
     const { drawingBufferWidth: width, drawingBufferHeight: height } = gl;
     const renderer = new Renderer({ gl }) as any;
@@ -250,7 +264,11 @@ export const Galaxy3D = ({ style }: Galaxy3DProps) => {
     // --- Animation Loop ---
     const t = 0.01;
     const render = () => {
-      requestAnimationFrame(render);
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      animationFrameIdRef.current = requestAnimationFrame(render);
       galaxyMaterial.uniforms.uTime.value += t / 2;
       universeMaterial.uniforms.uTime.value += t / 3;
 

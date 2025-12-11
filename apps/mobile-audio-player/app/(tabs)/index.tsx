@@ -65,6 +65,7 @@ type GroupMetadata = {
 
 type PlaybackOptions = {
   fromQueue?: boolean;
+  skipCacheCheck?: boolean;
 };
 
 type YouTubeSearchResult = {
@@ -136,7 +137,7 @@ LogBox.ignoreLogs([
 
 
 export default function HomeScreen() {
-  const { autoRefreshEnabled, keepAliveEnabled, showBanner, idleTimeout, showDebugConsole, cachePollingInterval } = useSettings();
+  const { autoRefreshEnabled, keepAliveEnabled, showBanner, backgroundMode, idleTimeout, showDebugConsole, cachePollingInterval } = useSettings();
   const { isIdleShared } = useIdle();
   const idleTimerRef = useRef<any>(null);
   const cachingPollIntervalRef = useRef<any>(null);
@@ -766,7 +767,9 @@ export default function HomeScreen() {
   // Handle queue completion manually via event since we are managing the queue state manually for now
   useTrackPlayerEvents([Event.PlaybackQueueEnded, Event.PlaybackError, Event.PlaybackState, Event.PlaybackTrackChanged], async (event) => {
     if (event.type === Event.PlaybackTrackChanged) {
-      addDebugLog(`TrackChanged: ${event.track?.id}, Index: ${event.index}, NextTrack: ${event.nextTrack?.id}`);
+      const trackId = typeof event.track === 'object' && event.track !== null ? (event.track as any).id : event.track;
+      const nextTrackId = typeof event.nextTrack === 'object' && event.nextTrack !== null ? (event.nextTrack as any).id : event.nextTrack;
+      addDebugLog(`TrackChanged: ${trackId}, Index: ${(event as any).index}, NextTrack: ${nextTrackId}`);
       console.log('Track changed:', event);
     }
     if (event.type === Event.PlaybackError) {

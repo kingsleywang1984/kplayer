@@ -39,6 +39,13 @@ export default function SettingsScreen() {
     setShowDebugConsole,
   } = useSettings();
   const { isIdleShared } = useIdle();
+
+  // Wrapper to reset idle state when changing background mode
+  const handleBackgroundModeChange = (mode: typeof backgroundMode) => {
+    setBackgroundMode(mode);
+    // Reset idle state to ensure tab bar is visible when switching backgrounds
+    isIdleShared.value = 0;
+  };
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [localIdleTimeout, setLocalIdleTimeout] = useState(idleTimeout);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -138,7 +145,7 @@ export default function SettingsScreen() {
             </View>
             <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
               <Pressable
-                onPress={() => setBackgroundMode('galaxy')}
+                onPress={() => handleBackgroundModeChange('galaxy')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'galaxy' && styles.modeButtonActive,
@@ -154,7 +161,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('rainbow_zappers')}
+                onPress={() => handleBackgroundModeChange('rainbow_zappers')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'rainbow_zappers' && styles.modeButtonActive,
@@ -170,7 +177,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('particle_sphere')}
+                onPress={() => handleBackgroundModeChange('particle_sphere')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'particle_sphere' && styles.modeButtonActive,
@@ -186,7 +193,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('tunnel_animation')}
+                onPress={() => handleBackgroundModeChange('tunnel_animation')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'tunnel_animation' && styles.modeButtonActive,
@@ -202,7 +209,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('wormhole')}
+                onPress={() => handleBackgroundModeChange('wormhole')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'wormhole' && styles.modeButtonActive,
@@ -218,7 +225,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('pure_black')}
+                onPress={() => handleBackgroundModeChange('pure_black')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'pure_black' && styles.modeButtonActive,

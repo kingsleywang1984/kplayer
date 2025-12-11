@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { GLView } from 'expo-gl';
 
@@ -7,6 +7,20 @@ interface RainbowZappersProps {
 }
 
 export const RainbowZappers = ({ style }: RainbowZappersProps) => {
+    const animationFrameIdRef = useRef<number | null>(null);
+    const isMountedRef = useRef(true);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+            if (animationFrameIdRef.current !== null) {
+                cancelAnimationFrame(animationFrameIdRef.current);
+                animationFrameIdRef.current = null;
+            }
+        };
+    }, []);
+
     const onContextCreate = async (gl: any) => {
         const vertexShaderSource = `#version 300 es
     in vec4 aPosition;
@@ -127,6 +141,12 @@ export const RainbowZappers = ({ style }: RainbowZappersProps) => {
         let startTime = Date.now();
 
         const render = () => {
+            if (!isMountedRef.current) {
+                return;
+            }
+
+            animationFrameIdRef.current = requestAnimationFrame(render);
+
             const time = Date.now() - startTime;
             gl.uniform3f(resolutionUniformLocation, gl.drawingBufferWidth, gl.drawingBufferHeight, 1.0);
             gl.uniform1f(timeUniformLocation, time * 0.001);
@@ -136,8 +156,6 @@ export const RainbowZappers = ({ style }: RainbowZappersProps) => {
 
             gl.flush();
             gl.endFrameEXP();
-
-            requestAnimationFrame(render);
         };
 
         render();
