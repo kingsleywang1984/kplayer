@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { GLView } from 'expo-gl';
 import { Renderer } from 'expo-three';
@@ -9,6 +9,20 @@ interface ParticleSphereProps {
 }
 
 export const ParticleSphere = ({ style }: ParticleSphereProps) => {
+    const animationFrameIdRef = useRef<number | null>(null);
+    const isMountedRef = useRef(true);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+            if (animationFrameIdRef.current !== null) {
+                cancelAnimationFrame(animationFrameIdRef.current);
+                animationFrameIdRef.current = null;
+            }
+        };
+    }, []);
+
     const onContextCreate = async (gl: any) => {
         const { drawingBufferWidth: width, drawingBufferHeight: height } = gl;
         const renderer = new Renderer({ gl }) as any;
@@ -139,6 +153,12 @@ export const ParticleSphere = ({ style }: ParticleSphereProps) => {
         const clock = new THREE.Clock();
 
         const render = () => {
+            if (!isMountedRef.current) {
+                return;
+            }
+
+            animationFrameIdRef.current = requestAnimationFrame(render);
+
             const elapsedTime = clock.getElapsedTime();
 
             sphereWireframeInner.rotation.x += 0.002;
@@ -180,7 +200,6 @@ export const ParticleSphere = ({ style }: ParticleSphereProps) => {
 
             renderer.render(scene, camera);
             gl.endFrameEXP();
-            requestAnimationFrame(render);
         };
 
         render();

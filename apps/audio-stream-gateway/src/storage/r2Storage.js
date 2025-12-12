@@ -5,6 +5,7 @@ const {
   PutObjectCommand,
   DeleteObjectCommand,
 } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { Upload } = require('@aws-sdk/lib-storage');
 const config = require('../config');
 
@@ -19,6 +20,7 @@ const s3Client = new S3Client({
 
 const TRACKS_INDEX_KEY = 'metadata/tracks.json';
 const GROUPS_INDEX_KEY = 'metadata/groups.json';
+const YOUTUBE_COOKIES_KEY = 'metadata/youtube-cookies.txt';
 
 async function streamToString(stream) {
   return new Promise((resolve, reject) => {
@@ -88,6 +90,15 @@ async function getFileStream(key) {
   });
   const result = await s3Client.send(command);
   return result.Body;
+}
+
+async function getSignedFileUrl(key, expiresIn = 3600) {
+  const command = new GetObjectCommand({
+    Bucket: config.r2.bucketName,
+    Key: key
+  });
+  const url = await getSignedUrl(s3Client, command, { expiresIn });
+  return url;
 }
 
 function uploadStream(key, bodyStream) {
@@ -185,9 +196,47 @@ async function deleteTrack(videoId) {
   return true;
 }
 
+/**
+ * Save YouTube cookies to R2 for persistence across server restarts
+ */
+async function saveYouTubeCookies(cookieData) {
+  const command = new PutObjectCommand({
+    Bucket: config.r2.bucketName,
+    Key: YOUTUBE_COOKIES_KEY,
+    Body: cookieData,
+    ContentType: 'text/plain',
+  });
+  await s3Client.send(command);
+  console.log('[R2] YouTube cookies saved to R2');
+}
+
+/**
+ * Load YouTube cookies from R2
+ * Returns null if cookies don't exist
+ */
+async function loadYouTubeCookies() {
+  const command = new GetObjectCommand({
+    Bucket: config.r2.bucketName,
+    Key: YOUTUBE_COOKIES_KEY,
+  });
+  try {
+    const result = await s3Client.send(command);
+    const body = await streamToString(result.Body);
+    console.log('[R2] YouTube cookies loaded from R2');
+    return body;
+  } catch (error) {
+    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
+      console.log('[R2] No YouTube cookies found in R2');
+      return null;
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   checkFileExists,
   getFileStream,
+  getSignedFileUrl,
   uploadStream,
   saveTrackMetadata,
   getTrackMetadata,
@@ -195,4 +244,6 @@ module.exports = {
   listGroups,
   saveGroups,
   deleteTrack,
+  saveYouTubeCookies,
+  loadYouTubeCookies,
 };

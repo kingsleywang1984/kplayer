@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { GLView } from 'expo-gl';
 import { Renderer } from 'expo-three';
@@ -9,6 +9,20 @@ interface TunnelAnimationProps {
 }
 
 export const TunnelAnimation = ({ style }: TunnelAnimationProps) => {
+    const animationFrameIdRef = useRef<number | null>(null);
+    const isMountedRef = useRef(true);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+            if (animationFrameIdRef.current !== null) {
+                cancelAnimationFrame(animationFrameIdRef.current);
+                animationFrameIdRef.current = null;
+            }
+        };
+    }, []);
+
     const onContextCreate = async (gl: any) => {
         const { drawingBufferWidth: width, drawingBufferHeight: height } = gl;
         const renderer = new Renderer({ gl }) as any;
@@ -118,6 +132,12 @@ export const TunnelAnimation = ({ style }: TunnelAnimationProps) => {
         scene.add(mesh);
 
         const render = () => {
+            if (!isMountedRef.current) {
+                return;
+            }
+
+            animationFrameIdRef.current = requestAnimationFrame(render);
+
             // Update particles and geometry
             let vIndex = 0;
             let cIndex = 0;
@@ -251,7 +271,6 @@ export const TunnelAnimation = ({ style }: TunnelAnimationProps) => {
 
             renderer.render(scene, camera);
             gl.endFrameEXP();
-            requestAnimationFrame(render);
         };
 
         render();
