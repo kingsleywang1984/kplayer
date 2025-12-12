@@ -35,6 +35,7 @@ const STORAGE_KEYS = {
   SHOW_BANNER: 'kplayer_show_banner',
   IDLE_TIMEOUT: 'kplayer_idle_timeout',
   SHOW_DEBUG_CONSOLE: 'kplayer_show_debug_console',
+  CACHE_POLLING_INTERVAL: 'kplayer_cache_polling_interval',
 };
 
 type SettingsContextValue = {
@@ -50,6 +51,8 @@ type SettingsContextValue = {
   setIdleTimeout: (value: number) => void;
   showDebugConsole: boolean;
   setShowDebugConsole: (value: boolean) => void;
+  cachePollingInterval: number;
+  setCachePollingInterval: (value: number) => void;
 };
 
 const SettingsContext = createContext<SettingsContextValue | undefined>(undefined);
@@ -61,23 +64,26 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [showBanner, setShowBanner] = useState(false);
   const [idleTimeout, setIdleTimeout] = useState(30);
   const [showDebugConsole, setShowDebugConsole] = useState(false);
+  const [cachePollingInterval, setCachePollingInterval] = useState(10); // Default 10 seconds
   const [isLoaded, setIsLoaded] = useState(false);
 
   // Load settings from AsyncStorage on mount
   useEffect(() => {
     async function loadSettings() {
       try {
-        const [storedMode, storedBanner, storedTimeout, storedDebug] = await Promise.all([
+        const [storedMode, storedBanner, storedTimeout, storedDebug, storedPolling] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEYS.BACKGROUND_MODE),
           AsyncStorage.getItem(STORAGE_KEYS.SHOW_BANNER),
           AsyncStorage.getItem(STORAGE_KEYS.IDLE_TIMEOUT),
           AsyncStorage.getItem(STORAGE_KEYS.SHOW_DEBUG_CONSOLE),
+          AsyncStorage.getItem(STORAGE_KEYS.CACHE_POLLING_INTERVAL),
         ]);
 
         if (storedMode) setBackgroundMode(storedMode as BackgroundMode);
         if (storedBanner !== null) setShowBanner(storedBanner === 'true');
         if (storedTimeout) setIdleTimeout(parseInt(storedTimeout, 10));
         if (storedDebug !== null) setShowDebugConsole(storedDebug === 'true');
+        if (storedPolling) setCachePollingInterval(parseInt(storedPolling, 10));
 
         setIsLoaded(true);
       } catch (error) {
@@ -112,6 +118,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     AsyncStorage.setItem(STORAGE_KEYS.SHOW_DEBUG_CONSOLE, String(showDebugConsole));
   }, [showDebugConsole, isLoaded]);
 
+  // Save cachePollingInterval when it changes
+  useEffect(() => {
+    if (!isLoaded) return;
+    AsyncStorage.setItem(STORAGE_KEYS.CACHE_POLLING_INTERVAL, String(cachePollingInterval));
+  }, [cachePollingInterval, isLoaded]);
+
   const value = useMemo(
     () => ({
       autoRefreshEnabled,
@@ -126,8 +138,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       setIdleTimeout,
       showDebugConsole,
       setShowDebugConsole,
+      cachePollingInterval,
+      setCachePollingInterval,
     }),
-    [autoRefreshEnabled, keepAliveEnabled, backgroundMode, showBanner, idleTimeout, showDebugConsole]
+    [autoRefreshEnabled, keepAliveEnabled, backgroundMode, showBanner, idleTimeout, showDebugConsole, cachePollingInterval]
   );
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
@@ -148,6 +162,7 @@ export const SETTINGS_DEFAULTS = {
   showBanner: false,
   idleTimeout: 30,
   showDebugConsole: false,
+  cachePollingInterval: 10,
 };
 
 export type BackgroundMode = 'galaxy' | 'pure_black' | 'rainbow_zappers' | 'particle_sphere' | 'tunnel_animation' | 'wormhole';

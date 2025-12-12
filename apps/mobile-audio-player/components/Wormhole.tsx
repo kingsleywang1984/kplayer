@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { View, StyleSheet, ViewStyle, StyleProp } from 'react-native';
 import { GLView } from 'expo-gl';
 import { Renderer, TextureLoader } from 'expo-three';
@@ -10,6 +10,20 @@ interface WormholeProps {
 }
 
 export const Wormhole = ({ style }: WormholeProps) => {
+  const animationFrameIdRef = useRef<number | null>(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (animationFrameIdRef.current !== null) {
+        cancelAnimationFrame(animationFrameIdRef.current);
+        animationFrameIdRef.current = null;
+      }
+    };
+  }, []);
+
   const onContextCreate = async (gl: any) => {
     const { drawingBufferWidth: width, drawingBufferHeight: height } = gl;
     const renderer = new Renderer({ gl }) as any;
@@ -208,9 +222,15 @@ export const Wormhole = ({ style }: WormholeProps) => {
     const clock = new THREE.Clock();
 
     const render = () => {
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      animationFrameIdRef.current = requestAnimationFrame(render);
+
       const delta = clock.getDelta();
       // Match the original script's time scale
-      // uniforms.u_time.value = -11000 + delta * 0.0005; 
+      // uniforms.u_time.value = -11000 + delta * 0.0005;
       // The original script likely uses a global timer or timestamp.
       // Let's use elapsed time with a similar scale factor if needed, or just increment.
       // The original uses `delta` which is usually time since last frame (e.g. 16ms).
@@ -221,7 +241,6 @@ export const Wormhole = ({ style }: WormholeProps) => {
 
       renderer.render(scene, camera);
       gl.endFrameEXP();
-      requestAnimationFrame(render);
     };
 
     render();

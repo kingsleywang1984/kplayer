@@ -7,6 +7,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, Eas
 
 import { Colors, TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
 import { SETTINGS_DEFAULTS, useSettings } from '@/context/settings-context';
+import { useIdle } from '@/context/idle-context';
 import { AppBackground } from '@/components/AppBackground';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { YouTubeLoginModal } from '@/components/YouTubeLoginModal';
@@ -37,6 +38,14 @@ export default function SettingsScreen() {
     showDebugConsole,
     setShowDebugConsole,
   } = useSettings();
+  const { isIdleShared } = useIdle();
+
+  // Wrapper to reset idle state when changing background mode
+  const handleBackgroundModeChange = (mode: typeof backgroundMode) => {
+    setBackgroundMode(mode);
+    // Reset idle state to ensure tab bar is visible when switching backgrounds
+    isIdleShared.value = 0;
+  };
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [localIdleTimeout, setLocalIdleTimeout] = useState(idleTimeout);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -136,7 +145,7 @@ export default function SettingsScreen() {
             </View>
             <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
               <Pressable
-                onPress={() => setBackgroundMode('galaxy')}
+                onPress={() => handleBackgroundModeChange('galaxy')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'galaxy' && styles.modeButtonActive,
@@ -152,7 +161,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('rainbow_zappers')}
+                onPress={() => handleBackgroundModeChange('rainbow_zappers')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'rainbow_zappers' && styles.modeButtonActive,
@@ -168,7 +177,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('particle_sphere')}
+                onPress={() => handleBackgroundModeChange('particle_sphere')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'particle_sphere' && styles.modeButtonActive,
@@ -184,7 +193,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('tunnel_animation')}
+                onPress={() => handleBackgroundModeChange('tunnel_animation')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'tunnel_animation' && styles.modeButtonActive,
@@ -200,7 +209,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('wormhole')}
+                onPress={() => handleBackgroundModeChange('wormhole')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'wormhole' && styles.modeButtonActive,
@@ -216,7 +225,7 @@ export default function SettingsScreen() {
                 </Text>
               </Pressable>
               <Pressable
-                onPress={() => setBackgroundMode('pure_black')}
+                onPress={() => handleBackgroundModeChange('pure_black')}
                 style={[
                   styles.modeButton,
                   backgroundMode === 'pure_black' && styles.modeButtonActive,
@@ -302,31 +311,19 @@ export default function SettingsScreen() {
                 {youtubeCookiesStatus?.message || '用于绕过YouTube的bot检测。登录后可以正常播放视频。'}
               </Text>
             </View>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <Pressable
-                onPress={checkYouTubeCookiesStatus}
-                style={styles.refreshButton}
-              >
-                <IconSymbol
-                  name="arrow.clockwise"
-                  size={20}
-                  color={TextColors.primary}
-                />
-              </Pressable>
-              <Pressable
-                onPress={() => setShowYouTubeLogin(true)}
-                style={[
-                  styles.refreshButton,
-                  { backgroundColor: youtubeCookiesStatus?.hasCookies ? SurfaceColors.hover : Colors.dark.tint }
-                ]}
-              >
-                <IconSymbol
-                  name={youtubeCookiesStatus?.hasCookies ? "checkmark.circle" : "person.circle"}
-                  size={20}
-                  color={TextColors.primary}
-                />
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={youtubeCookiesStatus?.hasCookies ? checkYouTubeCookiesStatus : () => setShowYouTubeLogin(true)}
+              style={[
+                styles.refreshButton,
+                { backgroundColor: youtubeCookiesStatus?.hasCookies ? SurfaceColors.hover : Colors.dark.tint }
+              ]}
+            >
+              <IconSymbol
+                name={youtubeCookiesStatus?.hasCookies ? "arrow.clockwise" : "person.circle"}
+                size={20}
+                color={TextColors.primary}
+              />
+            </Pressable>
           </View>
         </BlurView>
 
@@ -464,7 +461,11 @@ export default function SettingsScreen() {
       </ScrollView>
       <YouTubeLoginModal
         visible={showYouTubeLogin}
-        onDismiss={() => setShowYouTubeLogin(false)}
+        onDismiss={() => {
+          setShowYouTubeLogin(false);
+          // Reset idle state to ensure tab bar is visible when returning from modal
+          isIdleShared.value = 0;
+        }}
         onSuccess={() => {
           checkYouTubeCookiesStatus();
         }}
