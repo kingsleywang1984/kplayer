@@ -1,10 +1,14 @@
 {
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
+    "baseUrl": ".",
     "strict": true,
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "react-native-track-player": [
+        "./track-player-web-shim.js"
       ]
     }
   },
