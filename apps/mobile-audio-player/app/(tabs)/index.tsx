@@ -1260,7 +1260,7 @@ export default function HomeScreen() {
                     <IconButton
                       icon="play"
                       mode="contained"
-                      containerColor={(playerState === 'playing' || playerState === 'loading') ? '#87CEEB' : '#FFFFFF'}
+                      containerColor={(playerState === 'playing' || playerState === 'loading') ? '#E0B0FF' : '#FFFFFF'}
                       iconColor={(playerState === 'playing' || playerState === 'loading') ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 40 : 32}
                       onPress={playerState === 'paused' ? handleResume : handlePlay}
@@ -1268,7 +1268,7 @@ export default function HomeScreen() {
                     <IconButton
                       icon="pause"
                       mode="contained"
-                      containerColor={playerState === 'paused' ? '#87CEEB' : '#FFFFFF'}
+                      containerColor={playerState === 'paused' ? '#E0B0FF' : '#FFFFFF'}
                       iconColor={playerState === 'paused' ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={handlePause}
@@ -1276,7 +1276,7 @@ export default function HomeScreen() {
                     <IconButton
                       icon="stop"
                       mode="contained"
-                      containerColor={(playerState === 'idle' && !!currentTrackId) ? '#87CEEB' : '#FFFFFF'}
+                      containerColor={(playerState === 'idle' && !!currentTrackId) ? '#E0B0FF' : '#FFFFFF'}
                       iconColor={(playerState === 'idle' && !!currentTrackId) ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={stopPlayback}
@@ -1284,7 +1284,7 @@ export default function HomeScreen() {
                     <IconButton
                       icon={loopEnabled ? "repeat-once" : "repeat-off"}
                       mode="contained"
-                      containerColor={loopEnabled ? '#87CEEB' : '#FFFFFF'}
+                      containerColor={loopEnabled ? '#E0B0FF' : '#FFFFFF'}
                       iconColor={loopEnabled ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={() => handleLoopToggle(!loopEnabled)}
