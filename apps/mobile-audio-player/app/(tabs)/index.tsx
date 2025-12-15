@@ -154,10 +154,15 @@ export default function HomeScreen() {
   };
 
   // Helper to map RNTP state to UI state
-  const playerState = (playbackState.state === State.Playing) ? 'playing'
-    : (playbackState.state === State.Paused || playbackState.state === State.Ready) ? 'paused'
-      : (playbackState.state === State.Buffering || playbackState.state === State.Loading) ? 'loading'
-        : 'idle';
+  const [isStopped, setIsStopped] = useState(false);
+  const playerState = isStopped ? 'idle'
+    : (playbackState.state === State.Playing) ? 'playing'
+      : (playbackState.state === State.Paused || playbackState.state === State.Ready) ? 'paused'
+        : (playbackState.state === State.Buffering || playbackState.state === State.Loading) ? 'loading'
+          : 'idle';
+
+  // Clean up debug logs
+  // console.log(...) removed
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- only setter is used
   const [_message, setMessage] = useState<string | null>(null);
@@ -511,10 +516,14 @@ export default function HomeScreen() {
   }, []);
 
   const stopPlayback = useCallback(async () => {
+    try {
+      await TrackPlayer.stop(); // Force stop state
+    } catch (_) { }
     await unloadCurrentSound();
     clearQueue();
+    // Do not clear currentTrackId so we stay in "Stopped" state with a selected track
+    setIsStopped(true);
     setMessage(null);
-    setCurrentTrackId(null);
     setSeekValue(0);
     setIsSeeking(false);
   }, [clearQueue, unloadCurrentSound]);
@@ -641,6 +650,7 @@ export default function HomeScreen() {
         clearQueue();
       }
 
+      setIsStopped(false);
       setMessage(null);
 
       if (!options?.fromQueue) {
@@ -859,12 +869,14 @@ export default function HomeScreen() {
   // Progress monitoring was causing false triggers (restarting in middle of playback)
 
   const handlePlay = async () => {
-    if (!parsedVideoId) {
+    const targetId = parsedVideoId || currentTrackId;
+
+    if (!targetId) {
       setMessage('请输入有效的 YouTube 链接或视频 ID。');
       return;
     }
 
-    await initiatePlayback(parsedVideoId);
+    await initiatePlayback(targetId);
   };
 
   const handleLoopToggle = async (value: boolean) => {
@@ -932,6 +944,7 @@ export default function HomeScreen() {
         await axios.delete(`${STREAM_BASE_URL}/groups/${groupId}`);
         if (queueStateRef.current.groupId === groupId) {
           await stopPlayback();
+          setCurrentTrackId(null);
         }
         fetchGroups();
       } catch (error) {
@@ -1050,6 +1063,7 @@ export default function HomeScreen() {
         setSelectedTrackIds((prev) => prev.filter((id) => id !== videoId));
         if (currentTrackId === videoId) {
           await stopPlayback();
+          setCurrentTrackId(null);
         }
         setMessage('曲目已删除');
         fetchTracks();
@@ -1241,41 +1255,39 @@ export default function HomeScreen() {
                   </View>
                 )}
 
-                {!cachingVideoId && (
+                {!cachingVideoId && (parsedVideoId || currentTrackId) && (
                   <View style={styles.controls}>
                     <IconButton
                       icon="play"
                       mode="contained"
-                      containerColor={playerState === 'playing' || playerState === 'loading' ? theme.colors.surfaceVariant : theme.colors.primary}
-                      iconColor={theme.colors.onPrimary}
+                      containerColor={(playerState === 'playing' || playerState === 'loading') ? '#E0B0FF' : '#FFFFFF'}
+                      iconColor={(playerState === 'playing' || playerState === 'loading') ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 40 : 32}
                       onPress={playerState === 'paused' ? handleResume : handlePlay}
-                      disabled={!parsedVideoId || playerState === 'playing' || playerState === 'loading'}
                     />
                     <IconButton
                       icon="pause"
-                      mode="contained-tonal"
-                      containerColor={playerState === 'playing' || playerState === 'loading' ? theme.colors.primary : theme.colors.surfaceVariant}
+                      mode="contained"
+                      containerColor={playerState === 'paused' ? '#E0B0FF' : '#FFFFFF'}
+                      iconColor={playerState === 'paused' ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={handlePause}
-                      disabled={playerState !== 'playing' && playerState !== 'loading'}
                     />
                     <IconButton
                       icon="stop"
-                      mode="outlined"
-                      containerColor={playerState !== 'idle' ? theme.colors.errorContainer : undefined}
+                      mode="contained"
+                      containerColor={(playerState === 'idle' && !!currentTrackId) ? '#E0B0FF' : '#FFFFFF'}
+                      iconColor={(playerState === 'idle' && !!currentTrackId) ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={stopPlayback}
-                      disabled={playerState === 'idle'}
                     />
                     <IconButton
                       icon={loopEnabled ? "repeat-once" : "repeat-off"}
                       mode="contained"
-                      containerColor={loopEnabled ? theme.colors.primary : theme.colors.surfaceVariant}
-                      iconColor={loopEnabled ? theme.colors.onPrimary : theme.colors.onSurfaceVariant}
+                      containerColor={loopEnabled ? '#E0B0FF' : '#FFFFFF'}
+                      iconColor={loopEnabled ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={() => handleLoopToggle(!loopEnabled)}
-                      disabled={playerState === 'idle'}
                     />
                   </View>
                 )}
