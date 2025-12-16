@@ -1016,6 +1016,11 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const clearSearchResults = useCallback(() => {
+    setSearchResults([]);
+    setSearchError(null);
+  }, []);
+
   const handlePrimaryAction = useCallback(async () => {
     const trimmed = youtubeInput.trim();
     if (!trimmed) {
@@ -1179,6 +1184,16 @@ export default function HomeScreen() {
                 ) : null}
                 {searchResults.length > 0 && (
                   <View style={styles.searchResultsContainer}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <Text variant="titleMedium" style={{ color: TextColors.primary }}>搜索结果</Text>
+                      <IconButton
+                        icon="close"
+                        size={20}
+                        iconColor={theme.colors.onSurfaceVariant}
+                        onPress={clearSearchResults}
+                        style={{ margin: 0 }}
+                      />
+                    </View>
                     {searchResults.map((result) => (
                       <Pressable
                         key={result.videoId}
