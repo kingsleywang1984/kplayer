@@ -168,7 +168,7 @@ export default function HomeScreen() {
   const [_message, setMessage] = useState<string | null>(null);
   const [cachingVideoId, setCachingVideoId] = useState<string | null>(null); // Track which video is being cached
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
-  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [loopMode, setLoopMode] = useState<'off' | 'single' | 'shuffle'>('off');
   const [groupLoopEnabled, setGroupLoopEnabled] = useState(true);
   // Remove manual position/duration state, use progress hook
   const [tracks, setTracks] = useState<TrackMetadata[]>([]);
@@ -197,7 +197,7 @@ export default function HomeScreen() {
 
   const autoPlayLibraryTrack = useCallback(
     (previousVideoId?: string | null) => {
-      if (loopEnabled || queueStateRef.current.queue.length) {
+      if (loopMode !== 'off' || queueStateRef.current.queue.length) {
         return false;
       }
 
@@ -224,7 +224,7 @@ export default function HomeScreen() {
       );
       return true;
     },
-    [loopEnabled, tracks]
+    [loopMode, tracks]
   );
 
   const theme = useTheme();
@@ -685,10 +685,10 @@ export default function HomeScreen() {
 
         // On mobile, we handle looping manually via PlaybackQueueEnded event (RepeatMode.Track is unreliable with streams)
         // On web, use RepeatMode.Track as it works fine
-        const shouldLoop = !options?.fromQueue && loopEnabled;
+        const shouldLoop = !options?.fromQueue && loopMode === 'single';
         const repeatMode = Platform.OS === 'web' && shouldLoop ? RepeatMode.Track : RepeatMode.Off;
         await TrackPlayer.setRepeatMode(repeatMode);
-        addDebugLog(`Track added. Loop=${loopEnabled}, Platform=${Platform.OS}, RepeatMode=${repeatMode === RepeatMode.Track ? 'Track' : 'Off'}, URL=${streamInfo.url.substring(0, 50)}...`);
+        addDebugLog(`Track added. LoopMode=${loopMode}, Platform=${Platform.OS}, RepeatMode=${repeatMode === RepeatMode.Track ? 'Track' : 'Off'}, URL=${streamInfo.url.substring(0, 50)}...`);
 
         await TrackPlayer.play();
         setCurrentTrackId(videoId);
@@ -702,7 +702,7 @@ export default function HomeScreen() {
       }
     },
     [
-      loopEnabled,
+      loopMode,
       stopPlayback,
       clearQueue,
       playNextInQueue,
@@ -804,8 +804,8 @@ export default function HomeScreen() {
     }
 
     if (event.type === Event.PlaybackQueueEnded) {
-      addDebugLog(`QueueEnded (Loop: ${loopEnabled})`);
-      console.log('Queue ended. Loop:', loopEnabled, 'Queue:', queueStateRef.current.queue.length);
+      addDebugLog(`QueueEnded (LoopMode: ${loopMode})`);
+      console.log('Queue ended. LoopMode:', loopMode, 'Queue:', queueStateRef.current.queue.length);
 
       // Handle group queue playback
       if (queueStateRef.current.queue.length) {
@@ -815,7 +815,7 @@ export default function HomeScreen() {
 
       // For single track loop on mobile, we need to fully reset and re-add the track
       // seekTo(0) doesn't work reliably with streaming URLs on mobile
-      if (loopEnabled && currentTrackId) {
+      if (loopMode === 'single' && currentTrackId) {
         console.log('Looping single track - doing full reset');
         addDebugLog('Looping: Reloading track...');
 
@@ -849,8 +849,32 @@ export default function HomeScreen() {
         return;
       }
 
+      // Shuffle Loop Logic
+      if (loopMode === 'shuffle' && tracks.length > 0) {
+        addDebugLog('Shuffle: Selecting random track...');
+
+        // Filter out current track if possible to avoid immediate repeat, unless it's the only one
+        const availableTracks = tracks.length > 1
+          ? tracks.filter(t => t.videoId !== currentTrackId)
+          : tracks;
+
+        const randomIndex = Math.floor(Math.random() * availableTracks.length);
+        const nextTrack = availableTracks[randomIndex];
+
+        if (nextTrack) {
+          const initiator = initiatePlaybackRef.current;
+          if (initiator) {
+            // We treat this like a new playback initiation
+            initiator(nextTrack.videoId).catch((error) =>
+              console.warn('Shuffle playback failed', error)
+            );
+          }
+        }
+        return;
+      }
+
       // Track finished and no loop enabled
-      if (!loopEnabled) {
+      if (loopMode === 'off') {
         setMessage('播放完成');
         setCurrentTrackId(null);
         clearQueue();
@@ -879,16 +903,21 @@ export default function HomeScreen() {
     await initiatePlayback(targetId);
   };
 
-  const handleLoopToggle = async (value: boolean) => {
-    setLoopEnabled(value);
-    addDebugLog(`Loop toggle: ${value} (platform: ${Platform.OS})`);
+  const handleLoopToggle = async () => {
+    let nextMode: 'off' | 'single' | 'shuffle' = 'off';
+    if (loopMode === 'off') nextMode = 'single';
+    else if (loopMode === 'single') nextMode = 'shuffle';
+    else nextMode = 'off';
+
+    setLoopMode(nextMode);
+    addDebugLog(`Loop toggle: ${nextMode} (platform: ${Platform.OS})`);
     try {
-      // On mobile, we handle looping manually, so don't set RepeatMode.Track
-      const repeatMode = Platform.OS === 'web' && value ? RepeatMode.Track : RepeatMode.Off;
+      // On mobile, we handle looping manually based on 'single' mode
+      // For shuffle, repeatMode should be Off because we handle queueing manually
+      const repeatMode = Platform.OS === 'web' && nextMode === 'single' ? RepeatMode.Track : RepeatMode.Off;
       await TrackPlayer.setRepeatMode(repeatMode);
       const currentMode = await TrackPlayer.getRepeatMode();
       addDebugLog(`RepeatMode: ${currentMode} (mobile uses PlaybackQueueEnded event)`);
-      console.log('Repeat mode changed to:', currentMode, 'Platform:', Platform.OS);
     } catch (error) {
       console.warn('Unable to toggle loop', error);
       addDebugLog(`Loop toggle error: ${error}`);
@@ -1297,12 +1326,12 @@ export default function HomeScreen() {
                       onPress={stopPlayback}
                     />
                     <IconButton
-                      icon={loopEnabled ? "repeat-once" : "repeat-off"}
+                      icon={loopMode === 'single' ? "repeat-once" : loopMode === 'shuffle' ? "shuffle" : "repeat-off"}
                       mode="contained"
-                      containerColor={loopEnabled ? '#E0B0FF' : '#FFFFFF'}
-                      iconColor={loopEnabled ? '#FFFFFF' : '#000000'}
+                      containerColor={loopMode !== 'off' ? '#E0B0FF' : '#FFFFFF'}
+                      iconColor={loopMode !== 'off' ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
-                      onPress={() => handleLoopToggle(!loopEnabled)}
+                      onPress={handleLoopToggle}
                     />
                   </View>
                 )}
