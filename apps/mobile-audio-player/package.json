@@ -9,6 +9,7 @@
     "ios": "expo run:ios --port 8088",
     "ios-release": "npx expo run:ios --configuration Release --device",
     "web": "expo start --web --port 3333",
+    "build": "expo export -p web",
     "lint": "expo lint"
   },
   "dependencies": {

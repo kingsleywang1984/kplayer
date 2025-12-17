@@ -154,16 +154,21 @@ export default function HomeScreen() {
   };
 
   // Helper to map RNTP state to UI state
-  const playerState = (playbackState.state === State.Playing) ? 'playing'
-    : (playbackState.state === State.Paused || playbackState.state === State.Ready) ? 'paused'
-      : (playbackState.state === State.Buffering || playbackState.state === State.Loading) ? 'loading'
-        : 'idle';
+  const [isStopped, setIsStopped] = useState(false);
+  const playerState = isStopped ? 'idle'
+    : (playbackState.state === State.Playing) ? 'playing'
+      : (playbackState.state === State.Paused || playbackState.state === State.Ready) ? 'paused'
+        : (playbackState.state === State.Buffering || playbackState.state === State.Loading) ? 'loading'
+          : 'idle';
+
+  // Clean up debug logs
+  // console.log(...) removed
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- only setter is used
   const [_message, setMessage] = useState<string | null>(null);
   const [cachingVideoId, setCachingVideoId] = useState<string | null>(null); // Track which video is being cached
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
-  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [loopMode, setLoopMode] = useState<'off' | 'single' | 'shuffle'>('off');
   const [groupLoopEnabled, setGroupLoopEnabled] = useState(true);
   // Remove manual position/duration state, use progress hook
   const [tracks, setTracks] = useState<TrackMetadata[]>([]);
@@ -192,7 +197,7 @@ export default function HomeScreen() {
 
   const autoPlayLibraryTrack = useCallback(
     (previousVideoId?: string | null) => {
-      if (loopEnabled || queueStateRef.current.queue.length) {
+      if (loopMode !== 'off' || queueStateRef.current.queue.length) {
         return false;
       }
 
@@ -219,7 +224,7 @@ export default function HomeScreen() {
       );
       return true;
     },
-    [loopEnabled, tracks]
+    [loopMode, tracks]
   );
 
   const theme = useTheme();
@@ -511,10 +516,14 @@ export default function HomeScreen() {
   }, []);
 
   const stopPlayback = useCallback(async () => {
+    try {
+      await TrackPlayer.stop(); // Force stop state
+    } catch (_) { }
     await unloadCurrentSound();
     clearQueue();
+    // Do not clear currentTrackId so we stay in "Stopped" state with a selected track
+    setIsStopped(true);
     setMessage(null);
-    setCurrentTrackId(null);
     setSeekValue(0);
     setIsSeeking(false);
   }, [clearQueue, unloadCurrentSound]);
@@ -641,6 +650,7 @@ export default function HomeScreen() {
         clearQueue();
       }
 
+      setIsStopped(false);
       setMessage(null);
 
       if (!options?.fromQueue) {
@@ -675,10 +685,10 @@ export default function HomeScreen() {
 
         // On mobile, we handle looping manually via PlaybackQueueEnded event (RepeatMode.Track is unreliable with streams)
         // On web, use RepeatMode.Track as it works fine
-        const shouldLoop = !options?.fromQueue && loopEnabled;
+        const shouldLoop = !options?.fromQueue && loopMode === 'single';
         const repeatMode = Platform.OS === 'web' && shouldLoop ? RepeatMode.Track : RepeatMode.Off;
         await TrackPlayer.setRepeatMode(repeatMode);
-        addDebugLog(`Track added. Loop=${loopEnabled}, Platform=${Platform.OS}, RepeatMode=${repeatMode === RepeatMode.Track ? 'Track' : 'Off'}, URL=${streamInfo.url.substring(0, 50)}...`);
+        addDebugLog(`Track added. LoopMode=${loopMode}, Platform=${Platform.OS}, RepeatMode=${repeatMode === RepeatMode.Track ? 'Track' : 'Off'}, URL=${streamInfo.url.substring(0, 50)}...`);
 
         await TrackPlayer.play();
         setCurrentTrackId(videoId);
@@ -692,7 +702,7 @@ export default function HomeScreen() {
       }
     },
     [
-      loopEnabled,
+      loopMode,
       stopPlayback,
       clearQueue,
       playNextInQueue,
@@ -794,8 +804,8 @@ export default function HomeScreen() {
     }
 
     if (event.type === Event.PlaybackQueueEnded) {
-      addDebugLog(`QueueEnded (Loop: ${loopEnabled})`);
-      console.log('Queue ended. Loop:', loopEnabled, 'Queue:', queueStateRef.current.queue.length);
+      addDebugLog(`QueueEnded (LoopMode: ${loopMode})`);
+      console.log('Queue ended. LoopMode:', loopMode, 'Queue:', queueStateRef.current.queue.length);
 
       // Handle group queue playback
       if (queueStateRef.current.queue.length) {
@@ -805,7 +815,7 @@ export default function HomeScreen() {
 
       // For single track loop on mobile, we need to fully reset and re-add the track
       // seekTo(0) doesn't work reliably with streaming URLs on mobile
-      if (loopEnabled && currentTrackId) {
+      if (loopMode === 'single' && currentTrackId) {
         console.log('Looping single track - doing full reset');
         addDebugLog('Looping: Reloading track...');
 
@@ -839,8 +849,32 @@ export default function HomeScreen() {
         return;
       }
 
+      // Shuffle Loop Logic
+      if (loopMode === 'shuffle' && tracks.length > 0) {
+        addDebugLog('Shuffle: Selecting random track...');
+
+        // Filter out current track if possible to avoid immediate repeat, unless it's the only one
+        const availableTracks = tracks.length > 1
+          ? tracks.filter(t => t.videoId !== currentTrackId)
+          : tracks;
+
+        const randomIndex = Math.floor(Math.random() * availableTracks.length);
+        const nextTrack = availableTracks[randomIndex];
+
+        if (nextTrack) {
+          const initiator = initiatePlaybackRef.current;
+          if (initiator) {
+            // We treat this like a new playback initiation
+            initiator(nextTrack.videoId).catch((error) =>
+              console.warn('Shuffle playback failed', error)
+            );
+          }
+        }
+        return;
+      }
+
       // Track finished and no loop enabled
-      if (!loopEnabled) {
+      if (loopMode === 'off') {
         setMessage('播放完成');
         setCurrentTrackId(null);
         clearQueue();
@@ -859,24 +893,31 @@ export default function HomeScreen() {
   // Progress monitoring was causing false triggers (restarting in middle of playback)
 
   const handlePlay = async () => {
-    if (!parsedVideoId) {
+    const targetId = parsedVideoId || currentTrackId;
+
+    if (!targetId) {
       setMessage('请输入有效的 YouTube 链接或视频 ID。');
       return;
     }
 
-    await initiatePlayback(parsedVideoId);
+    await initiatePlayback(targetId);
   };
 
-  const handleLoopToggle = async (value: boolean) => {
-    setLoopEnabled(value);
-    addDebugLog(`Loop toggle: ${value} (platform: ${Platform.OS})`);
+  const handleLoopToggle = async () => {
+    let nextMode: 'off' | 'single' | 'shuffle' = 'off';
+    if (loopMode === 'off') nextMode = 'single';
+    else if (loopMode === 'single') nextMode = 'shuffle';
+    else nextMode = 'off';
+
+    setLoopMode(nextMode);
+    addDebugLog(`Loop toggle: ${nextMode} (platform: ${Platform.OS})`);
     try {
-      // On mobile, we handle looping manually, so don't set RepeatMode.Track
-      const repeatMode = Platform.OS === 'web' && value ? RepeatMode.Track : RepeatMode.Off;
+      // On mobile, we handle looping manually based on 'single' mode
+      // For shuffle, repeatMode should be Off because we handle queueing manually
+      const repeatMode = Platform.OS === 'web' && nextMode === 'single' ? RepeatMode.Track : RepeatMode.Off;
       await TrackPlayer.setRepeatMode(repeatMode);
       const currentMode = await TrackPlayer.getRepeatMode();
       addDebugLog(`RepeatMode: ${currentMode} (mobile uses PlaybackQueueEnded event)`);
-      console.log('Repeat mode changed to:', currentMode, 'Platform:', Platform.OS);
     } catch (error) {
       console.warn('Unable to toggle loop', error);
       addDebugLog(`Loop toggle error: ${error}`);
@@ -932,6 +973,7 @@ export default function HomeScreen() {
         await axios.delete(`${STREAM_BASE_URL}/groups/${groupId}`);
         if (queueStateRef.current.groupId === groupId) {
           await stopPlayback();
+          setCurrentTrackId(null);
         }
         fetchGroups();
       } catch (error) {
@@ -1003,6 +1045,11 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const clearSearchResults = useCallback(() => {
+    setSearchResults([]);
+    setSearchError(null);
+  }, []);
+
   const handlePrimaryAction = useCallback(async () => {
     const trimmed = youtubeInput.trim();
     if (!trimmed) {
@@ -1050,6 +1097,7 @@ export default function HomeScreen() {
         setSelectedTrackIds((prev) => prev.filter((id) => id !== videoId));
         if (currentTrackId === videoId) {
           await stopPlayback();
+          setCurrentTrackId(null);
         }
         setMessage('曲目已删除');
         fetchTracks();
@@ -1165,6 +1213,16 @@ export default function HomeScreen() {
                 ) : null}
                 {searchResults.length > 0 && (
                   <View style={styles.searchResultsContainer}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                      <Text variant="titleMedium" style={{ color: TextColors.primary }}>搜索结果</Text>
+                      <IconButton
+                        icon="close"
+                        size={20}
+                        iconColor={theme.colors.onSurfaceVariant}
+                        onPress={clearSearchResults}
+                        style={{ margin: 0 }}
+                      />
+                    </View>
                     {searchResults.map((result) => (
                       <Pressable
                         key={result.videoId}
@@ -1241,41 +1299,39 @@ export default function HomeScreen() {
                   </View>
                 )}
 
-                {!cachingVideoId && (
+                {!cachingVideoId && (parsedVideoId || currentTrackId) && (
                   <View style={styles.controls}>
                     <IconButton
                       icon="play"
                       mode="contained"
-                      containerColor={playerState === 'playing' || playerState === 'loading' ? theme.colors.surfaceVariant : theme.colors.primary}
-                      iconColor={theme.colors.onPrimary}
+                      containerColor={(playerState === 'playing' || playerState === 'loading') ? '#E0B0FF' : '#FFFFFF'}
+                      iconColor={(playerState === 'playing' || playerState === 'loading') ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 40 : 32}
                       onPress={playerState === 'paused' ? handleResume : handlePlay}
-                      disabled={!parsedVideoId || playerState === 'playing' || playerState === 'loading'}
                     />
                     <IconButton
                       icon="pause"
-                      mode="contained-tonal"
-                      containerColor={playerState === 'playing' || playerState === 'loading' ? theme.colors.primary : theme.colors.surfaceVariant}
+                      mode="contained"
+                      containerColor={playerState === 'paused' ? '#E0B0FF' : '#FFFFFF'}
+                      iconColor={playerState === 'paused' ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={handlePause}
-                      disabled={playerState !== 'playing' && playerState !== 'loading'}
                     />
                     <IconButton
                       icon="stop"
-                      mode="outlined"
-                      containerColor={playerState !== 'idle' ? theme.colors.errorContainer : undefined}
+                      mode="contained"
+                      containerColor={(playerState === 'idle' && !!currentTrackId) ? '#E0B0FF' : '#FFFFFF'}
+                      iconColor={(playerState === 'idle' && !!currentTrackId) ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
                       onPress={stopPlayback}
-                      disabled={playerState === 'idle'}
                     />
                     <IconButton
-                      icon={loopEnabled ? "repeat-once" : "repeat-off"}
+                      icon={loopMode === 'single' ? "repeat-once" : loopMode === 'shuffle' ? "shuffle" : "repeat-off"}
                       mode="contained"
-                      containerColor={loopEnabled ? theme.colors.primary : theme.colors.surfaceVariant}
-                      iconColor={loopEnabled ? theme.colors.onPrimary : theme.colors.onSurfaceVariant}
+                      containerColor={loopMode !== 'off' ? '#E0B0FF' : '#FFFFFF'}
+                      iconColor={loopMode !== 'off' ? '#FFFFFF' : '#000000'}
                       size={Platform.OS === 'web' ? 32 : 28}
-                      onPress={() => handleLoopToggle(!loopEnabled)}
-                      disabled={playerState === 'idle'}
+                      onPress={handleLoopToggle}
                     />
                   </View>
                 )}
