@@ -1,13 +1,8 @@
 const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
-const exclusionList = (additionalExclusions) => {
-    return new RegExp(additionalExclusions.map((re) => `(${re.source})`).join('|'));
-};
 
 const projectRoot = __dirname;
 const workspaceRoot = path.resolve(projectRoot, '../..');
-
-const escape = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const config = getDefaultConfig(projectRoot);
 
@@ -23,20 +18,13 @@ config.resolver.nodeModulesPaths = [
 // 3. Force resolution of critical dependencies to the local version
 config.resolver.extraNodeModules = {
     ...config.resolver.extraNodeModules,
-    'react': path.resolve(projectRoot, 'node_modules/react'),
-    'react-native': path.resolve(projectRoot, 'node_modules/react-native'),
-    'react-dom': path.resolve(projectRoot, 'node_modules/react-dom'),
-    '@expo/vector-icons': path.resolve(projectRoot, 'node_modules/@expo/vector-icons'),
+    'react': path.resolve(workspaceRoot, 'node_modules/react'),
+    'react-native': path.resolve(workspaceRoot, 'node_modules/react-native'),
+    'react-dom': path.resolve(workspaceRoot, 'node_modules/react-dom'),
+    '@expo/vector-icons': path.resolve(workspaceRoot, 'node_modules/@expo/vector-icons'),
 };
 
-const blockList = exclusionList([
-    new RegExp(`^${escape(path.resolve(workspaceRoot, 'node_modules/react'))}\\/.*$`),
-    new RegExp(`^${escape(path.resolve(workspaceRoot, 'node_modules/react-native'))}\\/.*$`),
-    new RegExp(`^${escape(path.resolve(workspaceRoot, 'node_modules/react-dom'))}\\/.*$`),
-]);
-
-config.resolver.blacklistRE = blockList;
-config.resolver.blockList = blockList;
+// Note: blocklist removed to allow resolution from workspace root
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
     if (

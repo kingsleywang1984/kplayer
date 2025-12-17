@@ -8,10 +8,16 @@
     "dev:gateway": "docker compose up audio-stream-gateway --build -d",
     "start:gateway": "pnpm --filter audio-stream-gateway start",
     "dev:mobile": "pnpm --filter mobile-audio-player start",
+    "build": "pnpm --filter mobile-audio-player build && cp -r apps/mobile-audio-player/dist .",
     "prebuild:mobile:ios": "pnpm --filter mobile-audio-player exec expo prebuild --platform ios"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-native-web": "~0.21.0"
+  }
 }
