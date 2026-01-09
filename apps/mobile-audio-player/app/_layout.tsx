@@ -8,6 +8,7 @@ import { PaperProvider, MD3DarkTheme, MD3LightTheme, adaptNavigationTheme } from
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { SettingsProvider } from '@/context/settings-context';
 import { IdleProvider } from '@/context/idle-context';
+import { AccessGate } from '@/components/AccessGate';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -35,6 +36,7 @@ export default function RootLayout() {
                 <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
               </Stack>
               <StatusBar style="auto" />
+              <AccessGate />
             </ThemeProvider>
           </PaperProvider>
         </IdleProvider>

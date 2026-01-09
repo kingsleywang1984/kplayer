@@ -24,7 +24,7 @@ This will install dependencies for both packages because the root workspace is a
 
 ## Backend: Audio Stream Gateway
 
-1. Copy `apps/audio-stream-gateway/.env.example` to `.env` and fill in the Cloudflare R2 values (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_BUCKET_NAME`, optional `PORT`). Provide `YOUTUBE_API_KEY` (YouTube Data API v3) if you want to enable server-side search.
+1. Copy `apps/audio-stream-gateway/.env.example` to `.env` and fill in the Cloudflare R2 values (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_BUCKET_NAME`, optional `PORT`). Provide `YOUTUBE_API_KEY` (YouTube Data API v3) if you want to enable server-side search, and set `ACCESS_CODE` if you want clients to see the new access gate overlay before using the app (leave blank to disable).
 2. Make sure FFmpeg is available on your machine when running locally.
 3. Start the server:
 
@@ -57,7 +57,7 @@ Follow the steps in the SDD (bucket, API token, endpoint). The environment varia
 
 ## Mobile app: Expo audio client
 
-1. Copy `apps/mobile-audio-player/.env.example` to `apps/mobile-audio-player/.env` and set `EXPO_PUBLIC_STREAM_BASE_URL` to your backend URL (for LAN testing it can be `http://<LOCAL_IP>:3000`). Set `EXPO_PUBLIC_ENABLE_AUTO_REFRESH=false` to disable the metadata refresh timer, and `EXPO_PUBLIC_ENABLE_KEEP_ALIVE=false` to stop Render keep-alive pings.
+1. Copy `apps/mobile-audio-player/.env.example` to `apps/mobile-audio-player/.env` and set `EXPO_PUBLIC_STREAM_BASE_URL` to your backend URL (for LAN testing it can be `http://<LOCAL_IP>:3000`). Set `EXPO_PUBLIC_ENABLE_AUTO_REFRESH=false` to disable the metadata refresh timer, `EXPO_PUBLIC_ENABLE_KEEP_ALIVE=false` to stop Render keep-alive pings, and optionally `EXPO_PUBLIC_ACCESS_CODE_TTL_MINUTES=<minutes>` to force users to re-enter the gateway access code after the given duration (leave unset for no expiry).
 2. Start the Expo dev server:
 
 ```bash

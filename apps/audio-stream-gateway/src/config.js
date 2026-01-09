@@ -1,5 +1,6 @@
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const dotenv = require('dotenv');
 
 const envPath = path.resolve(process.cwd(), '.env');
@@ -33,6 +34,18 @@ const config = {
   youtube: {
     apiKey: process.env.YOUTUBE_API_KEY || '',
   },
+  accessControl: {
+    accessCode: process.env.ACCESS_CODE || '',
+  },
 };
+
+if (config.accessControl.accessCode) {
+  config.accessControl.codeHash = crypto
+    .createHash('sha256')
+    .update(config.accessControl.accessCode)
+    .digest('hex');
+} else {
+  config.accessControl.codeHash = null;
+}
 
 module.exports = config;

@@ -51,6 +51,7 @@ export default function SettingsScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [youtubeCookiesStatus, setYoutubeCookiesStatus] = useState<YouTubeCookiesStatus | null>(null);
   const [showYouTubeLogin, setShowYouTubeLogin] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
   const rotation = useSharedValue(0);
 
   const animatedIconStyle = useAnimatedStyle(() => ({
@@ -105,6 +106,22 @@ export default function SettingsScreen() {
         hasCookies: false,
         message: 'Failed to check status'
       });
+    }
+  };
+
+  const logoutFromYouTube = async () => {
+    if (!STREAM_BASE_URL || isLoggingOut) {
+      return;
+    }
+
+    try {
+      setIsLoggingOut(true);
+      await axios.delete(`${STREAM_BASE_URL}/api/youtube-cookies`);
+      await checkYouTubeCookiesStatus();
+    } catch (error) {
+      console.warn('Failed to logout from YouTube', error);
+    } finally {
+      setIsLoggingOut(false);
     }
   };
 
@@ -290,7 +307,7 @@ export default function SettingsScreen() {
           <View style={styles.cardContent}>
             <View style={styles.cardText}>
               <Text style={styles.cardTitle}>YouTube 登录</Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 8 }}>
                 <View
                   style={[
                     styles.statusDot,
@@ -300,6 +317,15 @@ export default function SettingsScreen() {
                 <Text style={styles.cardSubtitle}>
                   {youtubeCookiesStatus?.hasCookies ? '已登录' : '未登录'}
                 </Text>
+                {youtubeCookiesStatus?.hasCookies && (
+                  <Pressable
+                    onPress={logoutFromYouTube}
+                    disabled={isLoggingOut}
+                    style={[styles.logoutTextButton, isLoggingOut && styles.logoutDisabled]}
+                  >
+                    <Text style={styles.logoutText}>登出</Text>
+                  </Pressable>
+                )}
               </View>
               {youtubeCookiesStatus?.lastUpdated && (
                 <Text style={[styles.cardDescription, { fontSize: 12, marginTop: 4 }]}>
@@ -311,19 +337,22 @@ export default function SettingsScreen() {
                 {youtubeCookiesStatus?.message || '用于绕过YouTube的bot检测。登录后可以正常播放视频。'}
               </Text>
             </View>
-            <Pressable
-              onPress={youtubeCookiesStatus?.hasCookies ? checkYouTubeCookiesStatus : () => setShowYouTubeLogin(true)}
-              style={[
-                styles.refreshButton,
-                { backgroundColor: youtubeCookiesStatus?.hasCookies ? SurfaceColors.hover : Colors.dark.tint }
-              ]}
-            >
-              <IconSymbol
-                name={youtubeCookiesStatus?.hasCookies ? "arrow.clockwise" : "person.circle"}
-                size={20}
-                color={TextColors.primary}
-              />
-            </Pressable>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Pressable
+                onPress={youtubeCookiesStatus?.hasCookies ? checkYouTubeCookiesStatus : () => setShowYouTubeLogin(true)}
+                disabled={isLoggingOut}
+                style={[
+                  styles.refreshButton,
+                  { backgroundColor: youtubeCookiesStatus?.hasCookies ? SurfaceColors.hover : Colors.dark.tint }
+                ]}
+              >
+                <IconSymbol
+                  name={youtubeCookiesStatus?.hasCookies ? 'arrow.clockwise' : 'person.circle'}
+                  size={20}
+                  color={TextColors.primary}
+                />
+              </Pressable>
+            </View>
           </View>
         </BlurView>
 
@@ -580,5 +609,22 @@ const styles = StyleSheet.create({
   },
   refreshButtonDisabled: {
     opacity: 0.7,
+  },
+  logoutTextButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#ffffff',
+    borderRadius: 999,
+    minHeight: 28,
+    justifyContent: 'center',
+  },
+  logoutText: {
+    color: TextColors.primary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  logoutDisabled: {
+    opacity: 0.6,
   },
 });
