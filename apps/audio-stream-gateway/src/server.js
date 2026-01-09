@@ -29,6 +29,32 @@ app.get('/healthz', (_, res) => {
   res.json({ status: 'ok' });
 });
 
+const isAccessControlEnabled = Boolean(config.accessControl?.accessCode);
+
+app.get('/api/access-control/status', (_req, res) => {
+  res.json({
+    enabled: isAccessControlEnabled,
+    version: isAccessControlEnabled ? config.accessControl.codeHash : null,
+  });
+});
+
+app.post('/api/access-control/verify', (req, res) => {
+  if (!isAccessControlEnabled) {
+    return res.json({ success: true, version: null });
+  }
+
+  const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
+  if (!code) {
+    return res.status(400).json({ success: false, message: 'Access code required' });
+  }
+
+  if (code === config.accessControl.accessCode) {
+    return res.json({ success: true, version: config.accessControl.codeHash });
+  }
+
+  return res.status(401).json({ success: false, message: 'Access code invalid' });
+});
+
 app.get('/search', async (req, res) => {
   if (!config.youtube?.apiKey) {
     return res.status(503).json({ message: 'YouTube search is not configured' });
@@ -520,6 +546,33 @@ app.get('/api/youtube-cookies/status', (req, res) => {
   } catch (error) {
     console.error('[Cookies] Failed to check status', error);
     res.status(500).json({ message: 'Failed to check cookies status' });
+  }
+});
+
+app.delete('/api/youtube-cookies', async (_req, res) => {
+  try {
+    let deletedLocal = false;
+    if (fs.existsSync(COOKIES_FILE_PATH)) {
+      fs.unlinkSync(COOKIES_FILE_PATH);
+      deletedLocal = true;
+      console.log('[Cookies] Local YouTube cookies file deleted');
+    }
+
+    try {
+      await storage.deleteYouTubeCookies();
+    } catch (error) {
+      console.error('[Cookies] Failed to delete cookies from R2', error);
+      return res.status(500).json({ message: 'Failed to delete cookies from R2' });
+    }
+
+    res.json({
+      message: 'Cookies deleted',
+      deletedLocal,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('[Cookies] Failed to delete cookies', error);
+    res.status(500).json({ message: 'Failed to delete cookies' });
   }
 });
 

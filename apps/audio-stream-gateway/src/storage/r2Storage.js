@@ -233,6 +233,26 @@ async function loadYouTubeCookies() {
   }
 }
 
+/**
+ * Delete persisted YouTube cookies from R2
+ */
+async function deleteYouTubeCookies() {
+  const command = new DeleteObjectCommand({
+    Bucket: config.r2.bucketName,
+    Key: YOUTUBE_COOKIES_KEY,
+  });
+  try {
+    await s3Client.send(command);
+    console.log('[R2] YouTube cookies deleted from R2');
+  } catch (error) {
+    if (error?.$metadata?.httpStatusCode === 404 || error?.name === 'NoSuchKey') {
+      console.log('[R2] YouTube cookies not present in R2');
+      return;
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   checkFileExists,
   getFileStream,
@@ -246,4 +266,5 @@ module.exports = {
   deleteTrack,
   saveYouTubeCookies,
   loadYouTubeCookies,
+  deleteYouTubeCookies,
 };
