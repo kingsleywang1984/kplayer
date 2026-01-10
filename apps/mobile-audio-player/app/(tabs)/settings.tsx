@@ -46,6 +46,7 @@ export default function SettingsScreen() {
     // Reset idle state to ensure tab bar is visible when switching backgrounds
     isIdleShared.value = 0;
   };
+  const isWeb = Platform.OS === 'web';
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus>('checking');
   const [localIdleTimeout, setLocalIdleTimeout] = useState(idleTimeout);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -317,7 +318,16 @@ export default function SettingsScreen() {
                 <Text style={styles.cardSubtitle}>
                   {youtubeCookiesStatus?.hasCookies ? '已登录' : '未登录'}
                 </Text>
-                {youtubeCookiesStatus?.hasCookies && (
+                {!isWeb && !youtubeCookiesStatus?.hasCookies && (
+                  <Pressable
+                    onPress={() => setShowYouTubeLogin(true)}
+                    disabled={isLoggingOut}
+                    style={[styles.logoutTextButton, isLoggingOut && styles.logoutDisabled]}
+                  >
+                    <Text style={styles.logoutText}>登录</Text>
+                  </Pressable>
+                )}
+                {!isWeb && youtubeCookiesStatus?.hasCookies && (
                   <Pressable
                     onPress={logoutFromYouTube}
                     disabled={isLoggingOut}
@@ -334,20 +344,25 @@ export default function SettingsScreen() {
                 </Text>
               )}
               <Text style={styles.cardDescription}>
-                {youtubeCookiesStatus?.message || '用于绕过YouTube的bot检测。登录后可以正常播放视频。'}
+                {isWeb && !youtubeCookiesStatus?.hasCookies
+                  ? '请在移动端登录后点击刷新查看状态。'
+                  : youtubeCookiesStatus?.message || '用于确保 YouTube 流畅播放。'}
               </Text>
             </View>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Pressable
-                onPress={youtubeCookiesStatus?.hasCookies ? checkYouTubeCookiesStatus : () => setShowYouTubeLogin(true)}
+                onPress={() => {
+                  if (isWeb) {
+                    checkYouTubeCookiesStatus();
+                    return;
+                  }
+                  checkYouTubeCookiesStatus();
+                }}
                 disabled={isLoggingOut}
-                style={[
-                  styles.refreshButton,
-                  { backgroundColor: youtubeCookiesStatus?.hasCookies ? SurfaceColors.hover : Colors.dark.tint }
-                ]}
+                style={[styles.refreshButton, isLoggingOut && styles.refreshButtonDisabled]}
               >
                 <IconSymbol
-                  name={youtubeCookiesStatus?.hasCookies ? 'arrow.clockwise' : 'person.circle'}
+                  name="arrow.clockwise"
                   size={20}
                   color={TextColors.primary}
                 />
@@ -489,7 +504,7 @@ export default function SettingsScreen() {
         </BlurView>
       </ScrollView>
       <YouTubeLoginModal
-        visible={showYouTubeLogin}
+        visible={!isWeb && showYouTubeLogin}
         onDismiss={() => {
           setShowYouTubeLogin(false);
           // Reset idle state to ensure tab bar is visible when returning from modal
@@ -609,6 +624,9 @@ const styles = StyleSheet.create({
   },
   refreshButtonDisabled: {
     opacity: 0.7,
+  },
+  loginButton: {
+    backgroundColor: Colors.dark.tint,
   },
   logoutTextButton: {
     paddingHorizontal: 12,
