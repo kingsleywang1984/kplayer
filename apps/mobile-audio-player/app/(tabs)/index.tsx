@@ -375,25 +375,34 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
+    if (!STREAM_BASE_URL) {
+      setGatewayStatus('offline');
+      return;
+    }
+
     let mounted = true;
+    let retryTimer: any = null;
+    let attempt = 0;
     setGatewayStatus('checking');
 
     async function pingGateway() {
-      if (!STREAM_BASE_URL) {
-        setGatewayStatus('offline');
-        return;
-      }
-
       try {
-        await axios.get(`${STREAM_BASE_URL}/healthz`, { timeout: 4000 });
+        // A sleeping Render instance takes far longer than a warm request to answer.
+        await axios.get(`${STREAM_BASE_URL}/healthz`, { timeout: 30000 });
         if (mounted) {
           setGatewayStatus('online');
         }
       } catch (error) {
         console.warn('Gateway health check failed', error);
-        if (mounted) {
-          setGatewayStatus('offline');
+        if (!mounted) {
+          return;
         }
+        setGatewayStatus('offline');
+        // Tracks and groups only load once the gateway reports online, and auto-refresh
+        // may be disabled - without retrying here a single failed ping leaves the library
+        // empty until the app is reloaded by hand.
+        attempt += 1;
+        retryTimer = setTimeout(pingGateway, Math.min(30000, 2000 * 2 ** (attempt - 1)));
       }
     }
 
@@ -401,6 +410,9 @@ export default function HomeScreen() {
 
     return () => {
       mounted = false;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+      }
     };
   }, []);
 
@@ -458,12 +470,16 @@ export default function HomeScreen() {
     }
   }, []);
 
+  const refreshLibrary = useCallback(() => {
+    fetchTracks();
+    fetchGroups();
+  }, [fetchTracks, fetchGroups]);
+
   useEffect(() => {
     if (gatewayStatus === 'online') {
-      fetchTracks();
-      fetchGroups();
+      refreshLibrary();
     }
-  }, [gatewayStatus, fetchTracks, fetchGroups]);
+  }, [gatewayStatus, refreshLibrary]);
 
   useEffect(() => {
     if (!autoRefreshEnabled) {
@@ -472,15 +488,14 @@ export default function HomeScreen() {
 
     const refreshAll = () => {
       if (gatewayStatus === 'online') {
-        fetchTracks();
-        fetchGroups();
+        refreshLibrary();
       }
     };
 
     refreshAll();
     const interval = setInterval(refreshAll, 30000);
     return () => clearInterval(interval);
-  }, [gatewayStatus, fetchTracks, fetchGroups, autoRefreshEnabled]);
+  }, [gatewayStatus, refreshLibrary, autoRefreshEnabled]);
 
   useEffect(() => {
     if (!STREAM_BASE_URL || !keepAliveEnabled) {
@@ -1397,7 +1412,7 @@ export default function HomeScreen() {
             <BlurView intensity={20} tint="dark" style={styles.glassCard}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionTitle}>{`Tracks (${tracks.length})`}</Text>
-                <IconButton icon="refresh" onPress={fetchTracks} iconColor={theme.colors.onSurface} />
+                <IconButton icon="refresh" onPress={refreshLibrary} iconColor={theme.colors.onSurface} />
               </View>
               <View style={styles.cardContent}>
                 {tracksLoading ? (

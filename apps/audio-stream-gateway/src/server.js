@@ -3,7 +3,7 @@ const cors = require('cors');
 const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const ffmpeg = require('fluent-ffmpeg');
-const { PassThrough } = require('stream');
+const { Transform } = require('stream');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
@@ -15,6 +15,11 @@ const YOUTUBE_SEARCH_ENDPOINT = 'https://www.googleapis.com/youtube/v3/search';
 const MUSIC_CATEGORY_ID = '10';
 const YOUTUBE_MAX_RESULTS = 5;
 const COOKIES_FILE_PATH = path.join('/tmp', 'youtube-cookies.txt');
+// An mp3 smaller than this cannot be real audio - it means the transcode produced
+// nothing (e.g. yt-dlp was blocked) and the object must not be treated as cached.
+const MIN_CACHED_BYTES = 4096;
+// A caching job whose process died leaves a dangling entry; after this it is retried.
+const MAX_JOB_AGE_MS = 15 * 60 * 1000;
 
 app.use(
   cors({
@@ -299,6 +304,49 @@ async function searchYouTubeSongs(query, maxResults = YOUTUBE_MAX_RESULTS) {
 // Track ongoing cache jobs to prevent duplicate downloads
 const cachingJobs = new Map();
 
+function lastStderrLines(text, maxLines = 3) {
+  const lines = String(text)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) {
+    return '';
+  }
+  return `: ${lines.slice(-maxLines).join(' | ')}`;
+}
+
+/**
+ * Finds a cached object holding real audio. A zero-byte object is the fingerprint of a
+ * transcode that failed silently, so it is purged instead of being served - otherwise the
+ * client receives a valid URL to an empty file and buffers forever without any error.
+ */
+async function resolveCachedKey(videoId, existingMetadata) {
+  const candidates = [
+    existingMetadata?.storageKey,
+    buildObjectKey(videoId, videoId),
+    `audio/${videoId}.mp3`,
+  ].filter(Boolean);
+
+  for (const key of new Set(candidates)) {
+    const size = await storage.getFileSize(key);
+    if (size === null) {
+      continue;
+    }
+
+    if (size < MIN_CACHED_BYTES) {
+      console.warn(`[Stream] Discarding empty cache object for ${videoId} (${size} bytes, key ${key})`);
+      await storage.deleteObject(key).catch((error) => {
+        console.error(`[Stream] Failed to delete empty object ${key}`, error);
+      });
+      continue;
+    }
+
+    return key;
+  }
+
+  return null;
+}
+
 app.get('/stream/:videoId', async (req, res, next) => {
   const rawVideoId = req.params.videoId;
   const videoId = getVideoId(rawVideoId);
@@ -309,19 +357,9 @@ app.get('/stream/:videoId', async (req, res, next) => {
 
   try {
     const existingMetadata = await storage.getTrackMetadata(videoId);
-    let cacheKey = existingMetadata?.storageKey;
-    let objectExists = false;
+    let cacheKey = await resolveCachedKey(videoId, existingMetadata);
 
     if (cacheKey) {
-      objectExists = await storage.checkFileExists(cacheKey);
-    }
-
-    if (!objectExists) {
-      cacheKey = `audio/${videoId}.mp3`;
-      objectExists = await storage.checkFileExists(cacheKey);
-    }
-
-    if (objectExists) {
       // Track is cached - return R2 signed URL
       console.log(`[Stream] Serving ${videoId} from cache (R2 URL)`);
       const signedUrl = await storage.getSignedFileUrl(cacheKey, 3600); // 1 hour expiry
@@ -349,13 +387,20 @@ app.get('/stream/:videoId', async (req, res, next) => {
         });
       }
 
-      console.log(`[Stream] Cache job already in progress for ${videoId}`);
-      return res.status(202).json({
-        cached: false,
-        caching: true,
-        message: 'Caching in progress',
-        videoId
-      });
+      // A job older than the cap belongs to a process that died mid-transcode; retry it
+      // instead of reporting "caching in progress" forever.
+      if (Date.now() - job.startTime < MAX_JOB_AGE_MS) {
+        console.log(`[Stream] Cache job already in progress for ${videoId}`);
+        return res.status(202).json({
+          cached: false,
+          caching: true,
+          message: 'Caching in progress',
+          videoId
+        });
+      }
+
+      console.warn(`[Stream] Discarding stale cache job for ${videoId}`);
+      cachingJobs.delete(videoId);
     }
 
     // Start background caching job
@@ -385,106 +430,130 @@ app.get('/stream/:videoId', async (req, res, next) => {
         youtubeUrl
       ]);
 
+      let failure = null;
+      let bytesTranscoded = 0;
+      let ytDlpStderr = '';
+      let ffmpegStderr = '';
+
+      // Keep the first failure - later ones are usually just fallout from it.
+      const recordFailure = (message) => {
+        if (!failure) {
+          failure = message;
+        }
+      };
+
       const ytDlp = spawn('yt-dlp', downloadArgs);
-      let hasError = false;
 
       ytDlp.stderr.on('data', (data) => {
         const message = data.toString();
+        ytDlpStderr += message;
         if (message.trim()) {
-          console.warn(`[Cache] yt-dlp warning for ${videoId}: ${message.trim()}`);
+          console.warn(`[Cache] yt-dlp for ${videoId}: ${message.trim()}`);
         }
       });
 
-      ytDlp.on('error', (error) => {
-        console.error(`[Cache] Failed to spawn yt-dlp for ${videoId}`, error);
-        hasError = true;
-        const job = cachingJobs.get(videoId);
-        if (job) {
-          job.error = `Failed to start download: ${error.message}`;
-        }
-      });
-
-      ytDlp.on('close', (code) => {
-        if (code !== 0 && !hasError) {
-          console.error(`[Cache] yt-dlp exited with code ${code} for ${videoId}`);
-          hasError = true;
-          const job = cachingJobs.get(videoId);
-          if (job) {
-            job.error = `Download failed with exit code ${code}`;
-          }
-        }
-      });
-
-      const transcoder = ffmpeg(ytDlp.stdout)
-        .audioBitrate(128)
-        .format('mp3')
-        .on('error', (error) => {
-          // "Output stream closed" means the stream finished successfully
-          // This is not a fatal error - the upload likely completed
-          if (error.message && error.message.includes('Output stream closed')) {
-            console.log(`[Cache] Stream closed for ${videoId} (upload likely completed)`);
-            return;
-          }
-
-          console.error(`[Cache] Transcode failed for ${videoId}`, error);
-          hasError = true;
-          const job = cachingJobs.get(videoId);
-          if (job) {
-            job.error = `Audio conversion failed: ${error.message}`;
-          }
-          ytDlp.kill('SIGKILL');
+      const downloadFinished = new Promise((resolve) => {
+        ytDlp.on('error', (error) => {
+          recordFailure(`Failed to start download: ${error.message}`);
+          resolve();
         });
 
-      const transcoderOutput = new PassThrough();
-      const cacheStream = new PassThrough();
-
-      transcoder.pipe(transcoderOutput);
-      transcoderOutput.pipe(cacheStream);
-
-      // Fetch metadata in background
-      fetchVideoInfo(videoId)
-        .then(async (videoInfo) => {
-          const thumbnails = Array.isArray(videoInfo.thumbnails) ? videoInfo.thumbnails : [];
-          const thumbnailUrl = videoInfo.thumbnail ?? thumbnails[thumbnails.length - 1]?.url ?? null;
-          const metadataPayload = {
-            videoId,
-            storageKey: cacheKey,
-            title: videoInfo.title ?? videoId,
-            author: videoInfo.uploader ?? videoInfo.channel ?? 'Unknown artist',
-            durationSeconds: typeof videoInfo.duration === 'number' ? videoInfo.duration : null,
-            thumbnailUrl,
-            createdAt: new Date().toISOString(),
-          };
-          await storage.saveTrackMetadata(metadataPayload);
-          console.log(`[Cache] Metadata saved for ${videoId}`);
-        })
-        .catch((error) => {
-          console.error(`[Cache] Failed to fetch metadata for ${videoId}`, error);
-          // Save minimal metadata as fallback
-          return storage.saveTrackMetadata({
-            videoId,
-            storageKey: cacheKey,
-            title: videoId,
-            author: 'Unknown',
-            durationSeconds: null,
-            thumbnailUrl: null,
-            createdAt: new Date().toISOString(),
-          });
+        ytDlp.on('close', (code, signal) => {
+          // A signal means we killed it ourselves after a transcode failure, which is
+          // already recorded - only a genuine non-zero exit is news.
+          if (code !== 0 && !signal) {
+            recordFailure(`Download failed (yt-dlp exit ${code})${lastStderrLines(ytDlpStderr)}`);
+          }
+          resolve();
         });
+      });
 
-      // Upload to R2
-      try {
-        await storage.uploadStream(cacheKey, cacheStream);
-        console.log(`[Cache] Successfully cached ${videoId} in R2`);
-        cachingJobs.delete(videoId);
-      } catch (error) {
-        console.error(`[Cache] Failed to upload ${videoId} to R2`, error);
-        const job = cachingJobs.get(videoId);
-        if (job) {
-          job.error = `Storage upload failed: ${error.message}`;
-        }
+      // Counts what actually reaches R2 so an empty transcode can never pass as a cache hit.
+      const cacheStream = new Transform({
+        transform(chunk, _encoding, callback) {
+          bytesTranscoded += chunk.length;
+          callback(null, chunk);
+        },
+      });
+
+      const transcodeFinished = new Promise((resolve) => {
+        ffmpeg(ytDlp.stdout)
+          .audioBitrate(128)
+          .format('mp3')
+          .on('stderr', (line) => {
+            ffmpegStderr += `${line}\n`;
+          })
+          .on('error', (error) => {
+            console.error(`[Cache] Transcode failed for ${videoId}`, error.message);
+            recordFailure(`Audio conversion failed: ${error.message}${lastStderrLines(ffmpegStderr)}`);
+            ytDlp.kill('SIGKILL');
+            // Abort the multipart upload instead of letting it commit an empty object.
+            cacheStream.destroy(new Error(failure));
+            resolve();
+          })
+          .on('end', resolve)
+          .pipe(cacheStream);
+      });
+
+      const metadataPromise = fetchVideoInfo(videoId).catch((error) => {
+        console.error(`[Cache] Failed to fetch metadata for ${videoId}`, error);
+        return null;
+      });
+
+      let uploadError = null;
+      const uploadFinished = storage.uploadStream(cacheKey, cacheStream).catch((error) => {
+        uploadError = error;
+      });
+
+      // The upload can resolve before ffmpeg reports its error, so success requires all
+      // three to have settled - not just the upload.
+      await Promise.all([uploadFinished, transcodeFinished, downloadFinished]);
+
+      if (!failure && uploadError) {
+        recordFailure(`Storage upload failed: ${uploadError.message}`);
       }
-    })(); // Immediately invoke async function
+
+      if (!failure && bytesTranscoded < MIN_CACHED_BYTES) {
+        recordFailure(
+          `Downloader produced no audio (${bytesTranscoded} bytes)${lastStderrLines(ytDlpStderr || ffmpegStderr)}`
+        );
+      }
+
+      if (failure) {
+        console.error(`[Cache] Failed to cache ${videoId}: ${failure}`);
+        // Leave nothing behind: an empty object would be served as a valid cache hit, and
+        // metadata would make the client believe the track is ready to play.
+        await storage.deleteObject(cacheKey).catch((error) => {
+          console.error(`[Cache] Failed to clean up ${cacheKey}`, error);
+        });
+        const job = cachingJobs.get(videoId);
+        if (job) {
+          job.error = failure;
+        }
+        return;
+      }
+
+      const videoInfo = await metadataPromise;
+      const thumbnails = Array.isArray(videoInfo?.thumbnails) ? videoInfo.thumbnails : [];
+      await storage.saveTrackMetadata({
+        videoId,
+        storageKey: cacheKey,
+        title: videoInfo?.title ?? videoId,
+        author: videoInfo?.uploader ?? videoInfo?.channel ?? 'Unknown artist',
+        durationSeconds: typeof videoInfo?.duration === 'number' ? videoInfo.duration : null,
+        thumbnailUrl: videoInfo?.thumbnail ?? thumbnails[thumbnails.length - 1]?.url ?? null,
+        createdAt: new Date().toISOString(),
+      });
+
+      console.log(`[Cache] Successfully cached ${videoId} in R2 (${bytesTranscoded} bytes)`);
+      cachingJobs.delete(videoId);
+    })().catch((error) => {
+      console.error(`[Cache] Unexpected failure while caching ${videoId}`, error);
+      const job = cachingJobs.get(videoId);
+      if (job) {
+        job.error = `Caching failed: ${error.message}`;
+      }
+    });
 
   } catch (error) {
     next(error);
@@ -612,8 +681,34 @@ async function loadCookiesOnStartup() {
   }
 }
 
+/**
+ * A stale yt-dlp is the most common cause of extraction failures, so make the version
+ * visible in the logs rather than only discoverable by shelling into the container.
+ */
+async function logYtDlpVersion() {
+  return new Promise((resolve) => {
+    const probe = spawn('yt-dlp', ['--version']);
+    let version = '';
+
+    probe.stdout.on('data', (chunk) => {
+      version += chunk.toString();
+    });
+
+    probe.on('error', () => {
+      console.error('[Startup] yt-dlp is not available on PATH - downloads will fail');
+      resolve();
+    });
+
+    probe.on('close', () => {
+      console.log(`[Startup] yt-dlp version ${version.trim() || 'unknown'}`);
+      resolve();
+    });
+  });
+}
+
 // Start server with cookie restoration
 (async () => {
+  await logYtDlpVersion();
   await loadCookiesOnStartup();
 
   app.listen(config.port, () => {

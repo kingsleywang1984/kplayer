@@ -61,24 +61,44 @@ async function getJson(key) {
   }
 }
 
-async function checkFileExists(key) {
+/**
+ * Returns the size in bytes of an object, or null when it does not exist.
+ * Used to reject zero-byte objects left behind by a failed transcode.
+ */
+async function getFileSize(key) {
   const command = new HeadObjectCommand({
     Bucket: config.r2.bucketName,
     Key: key
   });
 
   try {
-    await s3Client.send(command);
-    return true;
+    const result = await s3Client.send(command);
+    return typeof result.ContentLength === 'number' ? result.ContentLength : null;
   } catch (error) {
     if (error?.$metadata?.httpStatusCode === 404 || error?.name === 'NotFound') {
-      return false;
+      return null;
     }
 
     if (error?.Code === 'NoSuchKey') {
-      return false;
+      return null;
     }
 
+    throw error;
+  }
+}
+
+async function deleteObject(key) {
+  const command = new DeleteObjectCommand({
+    Bucket: config.r2.bucketName,
+    Key: key
+  });
+
+  try {
+    await s3Client.send(command);
+  } catch (error) {
+    if (error?.$metadata?.httpStatusCode === 404 || error?.Code === 'NoSuchKey') {
+      return;
+    }
     throw error;
   }
 }
@@ -254,7 +274,8 @@ async function deleteYouTubeCookies() {
 }
 
 module.exports = {
-  checkFileExists,
+  getFileSize,
+  deleteObject,
   getFileStream,
   getSignedFileUrl,
   uploadStream,
