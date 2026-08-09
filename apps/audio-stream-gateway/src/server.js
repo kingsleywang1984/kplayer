@@ -495,11 +495,6 @@ app.get('/stream/:videoId', async (req, res, next) => {
           .pipe(cacheStream);
       });
 
-      const metadataPromise = fetchVideoInfo(videoId).catch((error) => {
-        console.error(`[Cache] Failed to fetch metadata for ${videoId}`, error);
-        return null;
-      });
-
       let uploadError = null;
       const uploadFinished = storage.uploadStream(cacheKey, cacheStream).catch((error) => {
         uploadError = error;
@@ -533,7 +528,12 @@ app.get('/stream/:videoId', async (req, res, next) => {
         return;
       }
 
-      const videoInfo = await metadataPromise;
+      // Deliberately sequential: each yt-dlp run spawns its own JS runtime to solve
+      // YouTube's challenge, and two of those alongside ffmpeg exceeds a 512MB instance.
+      const videoInfo = await fetchVideoInfo(videoId).catch((error) => {
+        console.error(`[Cache] Failed to fetch metadata for ${videoId}`, error);
+        return null;
+      });
       const thumbnails = Array.isArray(videoInfo?.thumbnails) ? videoInfo.thumbnails : [];
       await storage.saveTrackMetadata({
         videoId,
