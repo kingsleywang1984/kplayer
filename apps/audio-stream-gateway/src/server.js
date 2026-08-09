@@ -469,7 +469,10 @@ app.get('/stream/:videoId', async (req, res, next) => {
       });
 
       // Counts what actually reaches R2 so an empty transcode can never pass as a cache hit.
+      // autoDestroy is off because the stream emitting 'close' the moment it ends races
+      // with ffmpeg's own exit, and fluent-ffmpeg reports whichever loses as an error.
       const cacheStream = new Transform({
+        autoDestroy: false,
         transform(chunk, _encoding, callback) {
           bytesTranscoded += chunk.length;
           callback(null, chunk);
@@ -484,6 +487,16 @@ app.get('/stream/:videoId', async (req, res, next) => {
             ffmpegStderr += `${line}\n`;
           })
           .on('error', (error) => {
+            // fluent-ffmpeg raises this when the output stream closes before it sees the
+            // process exit - the ordinary end of a successful transcode on a slow box, not
+            // a failure. Whether the audio really arrived is decided below by the byte
+            // count and the stored object, so treat it as benign here.
+            if (error.message?.includes('Output stream closed')) {
+              console.log(`[Cache] Output stream closed for ${videoId} after ${bytesTranscoded} bytes`);
+              resolve();
+              return;
+            }
+
             console.error(`[Cache] Transcode failed for ${videoId}`, error.message);
             recordFailure(`Audio conversion failed: ${error.message}${lastStderrLines(ffmpegStderr)}`);
             ytDlp.kill('SIGKILL');
@@ -512,6 +525,18 @@ app.get('/stream/:videoId', async (req, res, next) => {
         recordFailure(
           `Downloader produced no audio (${bytesTranscoded} bytes)${lastStderrLines(ytDlpStderr || ffmpegStderr)}`
         );
+      }
+
+      // Ground truth for success: the object is in R2 and holds every transcoded byte.
+      // Deciding on the absence of an error message instead is what let a completed
+      // transcode be thrown away over a harmless "Output stream closed".
+      if (!failure) {
+        const storedSize = await storage.getFileSize(cacheKey);
+        if (storedSize !== bytesTranscoded) {
+          recordFailure(
+            `Cached object is incomplete (stored ${storedSize ?? 'nothing'} of ${bytesTranscoded} bytes)`
+          );
+        }
       }
 
       if (failure) {
