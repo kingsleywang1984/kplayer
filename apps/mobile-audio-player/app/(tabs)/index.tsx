@@ -40,6 +40,9 @@ import { GroupDetailModal } from '@/components/GroupDetailModal';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
 const KEEP_ALIVE_INTERVAL_MS = 10 * 60 * 1000;
+// Upper bound on how long to wait for the gateway to finish caching a track. Nothing in
+// the exchange guarantees termination, so without this the player buffers indefinitely.
+const CACHE_POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const TRACK_ORDER_KEY = 'kplayer_track_order';
 
 type PlayerState = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
@@ -65,7 +68,6 @@ type GroupMetadata = {
 
 type PlaybackOptions = {
   fromQueue?: boolean;
-  skipCacheCheck?: boolean;
 };
 
 type YouTubeSearchResult = {
@@ -741,6 +743,14 @@ export default function HomeScreen() {
       clearInterval(cachingPollIntervalRef.current);
     }
 
+    const deadline = Date.now() + CACHE_POLL_TIMEOUT_MS;
+
+    const giveUp = (reason: string) => {
+      addDebugLog(`[ERROR] Cache polling gave up for ${videoId}: ${reason}`);
+      stopCachePolling();
+      setMessage('缓存超时，请稍后重试。');
+    };
+
     // Poll every N seconds to check if track is cached or if caching failed
     cachingPollIntervalRef.current = setInterval(async () => {
       try {
@@ -755,29 +765,38 @@ export default function HomeScreen() {
           return;
         }
 
-        // Check if track is now cached
-        const cachedTracks = await axios.get(`${STREAM_BASE_URL}/tracks`);
-        const foundTrack = cachedTracks.data?.tracks?.find((t: TrackMetadata) => t.videoId === videoId);
-
-        if (foundTrack) {
+        // The gateway reporting a playable object is the only sound completion signal.
+        // Metadata alone is not: a track can be listed while its audio is still missing,
+        // and treating that as done sent playback straight back into polling, forever.
+        if (streamInfo.cached) {
           addDebugLog(`Cache completed for ${videoId}`);
-          clearInterval(cachingPollIntervalRef.current);
-          cachingPollIntervalRef.current = null;
-          setCachingVideoId(null);
+          stopCachePolling();
           setMessage(null);
 
           // Refresh tracks list
           await fetchTracks();
 
           // Now play the cached track
-          await initiatePlayback(videoId, { skipCacheCheck: true });
-        } else {
-          addDebugLog(`Still caching ${videoId}...`);
+          await initiatePlayback(videoId);
+          return;
         }
+
+        // Nothing here is guaranteed to terminate on its own - a gateway that keeps
+        // restarting mid-download reports "caching" forever - so bound the wait rather
+        // than leaving the player buffering with no explanation.
+        if (Date.now() > deadline) {
+          giveUp('timed out waiting for the gateway to finish caching');
+          return;
+        }
+
+        addDebugLog(`Still caching ${videoId}...`);
       } catch (error) {
         console.error('Failed to poll cache status', error);
+        if (Date.now() > deadline) {
+          giveUp(`polling kept failing: ${error}`);
+        }
       }
-    }, cachePollingInterval * 1000);
+    }, Math.max(1, cachePollingInterval) * 1000);
   }, [cachePollingInterval, addDebugLog, fetchTracks, initiatePlayback, requestStreamInfo, stopCachePolling]);
 
   // Cleanup polling on unmount
