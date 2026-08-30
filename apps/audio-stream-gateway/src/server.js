@@ -232,6 +232,12 @@ function buildYtDlpArgs(baseArgs, tenant) {
     args.push('--cookies', cookiesPath);
     console.log(`[yt-dlp] Using cookies file for ${tenant.label}`);
   }
+  // Set by the entrypoint once a proxy is confirmed working, or supplied directly to point
+  // at some other proxy. YouTube's bot check keys on the source address, so this is the
+  // part that decides whether a download is allowed at all - cookies do not change it.
+  if (process.env.YTDLP_PROXY) {
+    args.push('--proxy', process.env.YTDLP_PROXY);
+  }
   return args;
 }
 

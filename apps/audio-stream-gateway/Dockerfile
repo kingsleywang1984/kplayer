@@ -13,6 +13,22 @@ RUN apt-get update \
   && ln -s /opt/deno/bin/deno /usr/local/bin/deno \
   && rm -rf /var/lib/apt/lists/*
 
+# YouTube applies its bot check by source address, and a shared cloud egress fails it no
+# matter what cookies are supplied. wgcf enrols a free Cloudflare WARP identity and
+# wireproxy speaks WireGuard entirely in userspace, exposing it as a local SOCKS5 proxy -
+# no TUN device and no NET_ADMIN, neither of which a Render container is granted.
+ARG TARGETARCH
+ARG WGCF_VERSION=2.2.32
+ARG WIREPROXY_VERSION=1.1.3
+RUN curl -fsSL -o /usr/local/bin/wgcf \
+      "https://github.com/ViRb3/wgcf/releases/download/v${WGCF_VERSION}/wgcf_${WGCF_VERSION}_linux_${TARGETARCH}" \
+  && chmod +x /usr/local/bin/wgcf \
+  && curl -fsSL -o /tmp/wireproxy.tar.gz \
+      "https://github.com/pufferffish/wireproxy/releases/download/v${WIREPROXY_VERSION}/wireproxy_linux_${TARGETARCH}.tar.gz" \
+  && tar -xzf /tmp/wireproxy.tar.gz -C /usr/local/bin wireproxy \
+  && chmod +x /usr/local/bin/wireproxy \
+  && rm -f /tmp/wireproxy.tar.gz
+
 ARG APP_DIR=apps/audio-stream-gateway
 WORKDIR /app
 
