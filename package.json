@@ -9,7 +9,8 @@
     "start:gateway": "pnpm --filter audio-stream-gateway start",
     "dev:mobile": "pnpm --filter mobile-audio-player start",
     "build": "pnpm --filter mobile-audio-player build && cp -r apps/mobile-audio-player/dist .",
-    "prebuild:mobile:ios": "pnpm --filter mobile-audio-player exec expo prebuild --platform ios"
+    "prebuild:mobile:ios": "pnpm --filter mobile-audio-player exec expo prebuild --platform ios",
+    "fetch": "./scripts/fetch.sh"
   },
   "keywords": [],
   "author": "",
