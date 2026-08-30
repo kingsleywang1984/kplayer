@@ -43,10 +43,14 @@ app.get('/healthz', (_, res) => {
 
 const isAccessControlEnabled = config.accessControl.enabled;
 
-// Deliberately says nothing beyond whether a code is needed. It used to return a hash of
-// the code, which is public and offline-crackable - for a short code, trivially so.
+// Says whether a code is needed and how many are configured - enough to tell a loaded
+// ACCESS_CODES from a silent fallback without shell access, and nothing more. It used to
+// return a hash of the code, which is public and offline-crackable.
 app.get('/api/access-control/status', (_req, res) => {
-  res.json({ enabled: isAccessControlEnabled });
+  res.json({
+    enabled: isAccessControlEnabled,
+    tenants: config.accessControl.tenantsById.size,
+  });
 });
 
 app.post('/api/access-control/verify', (req, res) => {
