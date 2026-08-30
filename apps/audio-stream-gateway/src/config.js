@@ -96,6 +96,17 @@ function buildTenants() {
 
   // Single-tenant fallback: one code guarding the one bucket, as before.
   if (process.env.ACCESS_CODE) {
+    // ACCESS_CODES (plural) is a separate variable, and putting the map into the old
+    // singular one leaves the whole JSON being compared as a single literal code - every
+    // access code is then rejected, with nothing to say why.
+    if (process.env.ACCESS_CODE.trim().startsWith('{')) {
+      throw new Error(
+        'ACCESS_CODE contains what looks like a JSON map. The code-to-bucket map belongs in ' +
+        'ACCESS_CODES (plural); ACCESS_CODE holds a single literal code and is only used ' +
+        'when ACCESS_CODES is unset'
+      );
+    }
+
     if (!bucket) {
       throw new Error('ACCESS_CODE is set but R2_BUCKET_NAME is missing');
     }
