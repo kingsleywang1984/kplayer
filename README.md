@@ -46,6 +46,20 @@ Every data endpoint requires `Authorization: Bearer <token>`, where the token co
 - `DELETE /tracks/:videoId` → 删除缓存音频、元数据，并从所有分组中移除该曲目。
 - `GET /groups` / `POST /groups` / `PUT|DELETE /groups/:id` → 管理前端分组播放所需的歌单。
 
+### Fetching blocked downloads
+
+YouTube refuses these downloads from the gateway's cloud egress and allows the identical request from a home connection — same video, same yt-dlp build, same cookies. When the gateway cannot fetch a track it records it as wanted in that tenant's bucket, and this script downloads it from a machine whose connection is accepted, writing to the same R2 buckets the gateway reads:
+
+```bash
+./scripts/fetch.sh                            # everything queued, for every access code
+./scripts/fetch.sh --tenant oz                # only that access code's queue
+./scripts/fetch.sh --tenant oz dQw4w9WgXcQ    # a specific video, without queueing first
+```
+
+Each access code has its own queue in its own bucket, so draining them needs no `--tenant` — the queues already say who wanted what. Naming a video does need one, or the same track would be stored for every access code. Whoever runs this needs the full `.env`, so in practice one person runs it for everyone.
+
+Requires Docker and `apps/audio-stream-gateway/.env`; the script creates that file from the example and tells you what to fill in if it is missing. The flow in the app does not change — search and tap download as usual, then run this and the track appears in the library.
+
 ### Docker / Render
 
 A Dockerfile lives at `apps/audio-stream-gateway/Dockerfile`. Build from the repo root:
