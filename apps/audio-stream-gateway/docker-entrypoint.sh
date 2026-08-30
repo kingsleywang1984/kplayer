@@ -46,6 +46,14 @@ start_warp_proxy() {
   # wireproxy reads a WireGuard profile plus its own sections. MTU is not one of the keys
   # it understands, so drop it rather than let the whole profile be rejected.
   grep -v '^MTU' wgcf-profile.conf > wireproxy.conf
+
+  # wgcf assigns both an IPv4 and an IPv6 address on one Address line. YouTube's media
+  # hosts serve the manifest happily and then answer the media request with 403 over many
+  # IPv6 ranges, so keep the tunnel on IPv4 unless asked otherwise.
+  if [ "${WARP_IPV6:-false}" != "true" ]; then
+    sed -i -E 's|^(Address = [0-9.]+/32), .*|\1|' wireproxy.conf
+    echo "[Startup] WARP tunnel restricted to IPv4 (set WARP_IPV6=true to allow IPv6)"
+  fi
   cat >> wireproxy.conf <<EOF
 
 [Socks5]
