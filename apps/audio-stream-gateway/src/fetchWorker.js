@@ -40,12 +40,29 @@ function parseArgs(argv) {
   let tenantName = null;
 
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--tenant') {
+    const arg = argv[i];
+
+    // Accept the single-dash spelling too, and reject anything else that looks like an
+    // option instead of silently filing it away as a video id - doing that turned a
+    // mistyped flag into a complaint about missing --tenant, which explains nothing.
+    if (arg === '--tenant' || arg === '-tenant') {
       tenantName = argv[i + 1];
+      if (!tenantName) {
+        throw new Error('--tenant needs a name');
+      }
       i += 1;
-    } else {
-      videoIds.push(argv[i]);
+      continue;
     }
+
+    if (arg.startsWith('-')) {
+      throw new Error(`Unknown option "${arg}". The only option is --tenant <name>`);
+    }
+
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(arg)) {
+      throw new Error(`"${arg}" is not a YouTube video id (11 characters)`);
+    }
+
+    videoIds.push(arg);
   }
 
   const available = allTenants();
