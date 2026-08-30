@@ -6,3 +6,7 @@ apps/mobile-audio-player/.expo
 apps/mobile-audio-player/.expo-shared
 apps/mobile-audio-player/ios
 apps/mobile-audio-player/android
+
+# Credentials belong in the runtime environment, never baked into an image layer.
+.env
+**/.env

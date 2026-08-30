@@ -37,7 +37,19 @@ function parseAccessCodes(raw) {
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`ACCESS_CODES is not valid JSON: ${error.message}`);
+    // Startup failure here means the platform keeps the previous deploy running, so the
+    // configuration looks applied while nothing has changed. Say exactly what to fix.
+    throw new Error(
+      `ACCESS_CODES is not valid JSON (${error.message}). It must be the bare JSON object, ` +
+      'with no surrounding quotes, e.g. {"code":"bucket-name"}'
+    );
+  }
+
+  if (typeof parsed === 'string') {
+    throw new Error(
+      'ACCESS_CODES parsed as a string, which usually means the value is wrapped in quotes. ' +
+      'Set it to the bare JSON object, e.g. {"code":"bucket-name"}'
+    );
   }
 
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -75,7 +87,9 @@ function parseAccessCodes(raw) {
 
 function buildTenants() {
   if (process.env.ACCESS_CODES) {
-    return { enabled: true, byCode: parseAccessCodes(process.env.ACCESS_CODES) };
+    const byCode = parseAccessCodes(process.env.ACCESS_CODES);
+    console.log(`[Config] ACCESS_CODES loaded: ${byCode.size} access code(s)`);
+    return { enabled: true, byCode };
   }
 
   const bucket = process.env.R2_BUCKET_NAME ? process.env.R2_BUCKET_NAME.trim() : '';
@@ -85,6 +99,12 @@ function buildTenants() {
     if (!bucket) {
       throw new Error('ACCESS_CODE is set but R2_BUCKET_NAME is missing');
     }
+    // Loud, because a misspelt ACCESS_CODES lands here and would otherwise look like the
+    // multi-tenant configuration simply having no effect.
+    console.warn(
+      '[Config] ACCESS_CODES is not set - falling back to single-tenant mode using ' +
+      `ACCESS_CODE and R2_BUCKET_NAME (${bucket})`
+    );
     return {
       enabled: true,
       byCode: new Map([[process.env.ACCESS_CODE, { id: bucket, bucket, label: bucket }]]),
@@ -95,6 +115,10 @@ function buildTenants() {
   if (!bucket) {
     throw new Error('Set either ACCESS_CODES or R2_BUCKET_NAME');
   }
+  console.warn(
+    `[Config] No ACCESS_CODES and no ACCESS_CODE - access control is DISABLED and every ` +
+    `request reads ${bucket}`
+  );
   return { enabled: false, byCode: new Map() };
 }
 
