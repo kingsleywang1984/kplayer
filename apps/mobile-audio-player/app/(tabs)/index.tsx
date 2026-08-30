@@ -33,6 +33,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 
 import { useSettings } from '@/context/settings-context';
+import { useAuth } from '@/context/auth-context';
 import { useIdle } from '@/context/idle-context';
 import { TextColors, SurfaceColors, BorderColors, StatusColors, Spacing, BorderRadius } from '@/constants/theme';
 import { AppBackground } from '@/components/AppBackground';
@@ -141,6 +142,7 @@ LogBox.ignoreLogs([
 export default function HomeScreen() {
   const { autoRefreshEnabled, keepAliveEnabled, showBanner, backgroundMode, idleTimeout, showDebugConsole, cachePollingInterval } = useSettings();
   const { isIdleShared } = useIdle();
+  const { token } = useAuth();
   const idleTimerRef = useRef<any>(null);
   const cachingPollIntervalRef = useRef<any>(null);
   const [outerScrollEnabled, setOuterScrollEnabled] = useState(true);
@@ -477,11 +479,13 @@ export default function HomeScreen() {
     fetchGroups();
   }, [fetchTracks, fetchGroups]);
 
+  // token is a dependency because the library cannot be read without one: the first fetch
+  // after launch may land before the access code is entered, and nothing else would retry.
   useEffect(() => {
     if (gatewayStatus === 'online') {
       refreshLibrary();
     }
-  }, [gatewayStatus, refreshLibrary]);
+  }, [gatewayStatus, refreshLibrary, token]);
 
   useEffect(() => {
     if (!autoRefreshEnabled) {
@@ -497,7 +501,7 @@ export default function HomeScreen() {
     refreshAll();
     const interval = setInterval(refreshAll, 30000);
     return () => clearInterval(interval);
-  }, [gatewayStatus, refreshLibrary, autoRefreshEnabled]);
+  }, [gatewayStatus, refreshLibrary, autoRefreshEnabled, token]);
 
   useEffect(() => {
     if (!STREAM_BASE_URL || !keepAliveEnabled) {

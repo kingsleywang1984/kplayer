@@ -8,6 +8,7 @@ import { PaperProvider, MD3DarkTheme, MD3LightTheme, adaptNavigationTheme } from
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { SettingsProvider } from '@/context/settings-context';
 import { IdleProvider } from '@/context/idle-context';
+import { AuthProvider } from '@/context/auth-context';
 import { AccessGate } from '@/components/AccessGate';
 
 export const unstable_settings = {
@@ -27,20 +28,22 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <SettingsProvider>
-        <IdleProvider>
-          <PaperProvider theme={paperTheme}>
-            <ThemeProvider value={navigationTheme}>
-              <Stack>
-                <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-                <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-              </Stack>
-              <StatusBar style="auto" />
-              <AccessGate />
-            </ThemeProvider>
-          </PaperProvider>
-        </IdleProvider>
-      </SettingsProvider>
+      <AuthProvider>
+        <SettingsProvider>
+          <IdleProvider>
+            <PaperProvider theme={paperTheme}>
+              <ThemeProvider value={navigationTheme}>
+                <Stack>
+                  <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+                  <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+                </Stack>
+                <StatusBar style="auto" />
+                <AccessGate />
+              </ThemeProvider>
+            </PaperProvider>
+          </IdleProvider>
+        </SettingsProvider>
+      </AuthProvider>
     </GestureHandlerRootView>
   );
 }
