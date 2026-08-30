@@ -1,37 +1,28 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
-import { TextColors } from '@/constants/theme';
+import { useAuth } from '@/context/auth-context';
 
 const STREAM_BASE_URL = (process.env.EXPO_PUBLIC_STREAM_BASE_URL ?? '').replace(/\/$/, '');
-const ACCESS_CODE_TTL_MINUTES = Number(process.env.EXPO_PUBLIC_ACCESS_CODE_TTL_MINUTES ?? '0');
-const ACCESS_CODE_TTL_MS = Number.isFinite(ACCESS_CODE_TTL_MINUTES) && ACCESS_CODE_TTL_MINUTES > 0
-  ? ACCESS_CODE_TTL_MINUTES * 60 * 1000
-  : 0;
-const STORAGE_KEY = '@kplayer/access-gate';
 
-type AccessStatus = {
-  enabled: boolean;
-  version: string | null;
-};
-
+/**
+ * The code is no longer just a local unlock - it selects which library the gateway serves,
+ * so verifying it exchanges it for a token that every later request carries. The token
+ * lives in the auth context; this component only collects the code.
+ */
 export function AccessGate() {
-  const [status, setStatus] = useState<AccessStatus>({ enabled: false, version: null });
+  const { token, ready, signIn } = useAuth();
+  const [enabled, setEnabled] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
-  const [verified, setVerified] = useState(false);
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [expiresAt, setExpiresAt] = useState<number | null>(null);
 
   const fetchStatus = useCallback(async () => {
     if (!STREAM_BASE_URL) {
-      setStatus({ enabled: false, version: null });
-      setVerified(true);
-      setExpiresAt(null);
+      setEnabled(false);
       setLoadingStatus(false);
       return;
     }
@@ -40,45 +31,12 @@ export function AccessGate() {
       setLoadingStatus(true);
       setStatusError(null);
       const response = await axios.get(`${STREAM_BASE_URL}/api/access-control/status`);
-      const payload: AccessStatus = {
-        enabled: Boolean(response.data?.enabled),
-        version: response.data?.version ?? null,
-      };
-      setStatus(payload);
-
-      if (!payload.enabled) {
-        setVerified(true);
-        setExpiresAt(null);
-      } else {
-        const storedRaw = await AsyncStorage.getItem(STORAGE_KEY);
-        if (storedRaw) {
-          try {
-            const stored = JSON.parse(storedRaw) as { version: string | null; expiresAt?: number | null };
-            const notExpired = !ACCESS_CODE_TTL_MS || (typeof stored.expiresAt === 'number' && stored.expiresAt > Date.now());
-            if (stored.version && stored.version === payload.version && notExpired) {
-              setVerified(true);
-              setExpiresAt(stored.expiresAt ?? null);
-            } else {
-              setVerified(false);
-              await AsyncStorage.removeItem(STORAGE_KEY);
-              setExpiresAt(null);
-            }
-          } catch (error) {
-            console.warn('[AccessGate] Failed to parse stored state', error);
-            setVerified(false);
-            setExpiresAt(null);
-          }
-        } else {
-          setVerified(false);
-          setExpiresAt(null);
-        }
-      }
+      setEnabled(Boolean(response.data?.enabled));
     } catch (error) {
       console.warn('[AccessGate] Failed to fetch status', error);
       setStatusError('无法获取访问控制状态，请检查后端服务');
-      setStatus({ enabled: true, version: null });
-      setVerified(false);
-      setExpiresAt(null);
+      // Fail closed: if we cannot tell, assume a code is needed rather than exposing the app.
+      setEnabled(true);
     } finally {
       setLoadingStatus(false);
     }
@@ -102,15 +60,13 @@ export function AccessGate() {
     setSubmitting(true);
     try {
       const response = await axios.post(`${STREAM_BASE_URL}/api/access-control/verify`, { code: trimmed });
-      if (response.data?.success) {
-        const expiresAt = ACCESS_CODE_TTL_MS ? Date.now() + ACCESS_CODE_TTL_MS : null;
-        await AsyncStorage.setItem(
-          STORAGE_KEY,
-          JSON.stringify({ version: response.data?.version ?? status.version, expiresAt })
-        );
-        setVerified(true);
+      if (response.data?.success && response.data?.token) {
+        await signIn({
+          token: response.data.token,
+          expiresAt: response.data.expiresAt ?? null,
+          label: response.data.label ?? null,
+        });
         setCode('');
-        setExpiresAt(expiresAt);
       } else {
         setSubmitError(response.data?.message || '访问码错误');
       }
@@ -122,35 +78,7 @@ export function AccessGate() {
     }
   };
 
-  useEffect(() => {
-    if (!ACCESS_CODE_TTL_MS || !verified || !expiresAt) {
-      return undefined;
-    }
-
-    const remaining = expiresAt - Date.now();
-    if (remaining <= 0) {
-      AsyncStorage.removeItem(STORAGE_KEY).catch((error) => {
-        console.warn('[AccessGate] Failed to clear expired key', error);
-      });
-      setVerified(false);
-      setExpiresAt(null);
-      setCode('');
-      return undefined;
-    }
-
-    const timeout = setTimeout(() => {
-      AsyncStorage.removeItem(STORAGE_KEY).catch((error) => {
-        console.warn('[AccessGate] Failed to clear expired key', error);
-      });
-      setVerified(false);
-      setExpiresAt(null);
-      setCode('');
-    }, remaining);
-
-    return () => clearTimeout(timeout);
-  }, [verified, expiresAt]);
-
-  if (!status.enabled || verified) {
+  if (!enabled || token) {
     return null;
   }
 
@@ -160,7 +88,7 @@ export function AccessGate() {
         style={styles.centerContent}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {loadingStatus ? (
+        {loadingStatus || !ready ? (
           <ActivityIndicator color="#ffffff" />
         ) : (
           <View style={styles.form}>
@@ -177,6 +105,7 @@ export function AccessGate() {
               autoCapitalize="none"
               autoCorrect={false}
               secureTextEntry
+              onSubmitEditing={handleSubmit}
             />
             <Pressable
               style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
@@ -185,6 +114,9 @@ export function AccessGate() {
             >
               <Text style={styles.submitText}>{submitting ? '验证中...' : '解锁'}</Text>
             </Pressable>
+            {(submitError || statusError) && (
+              <Text style={styles.errorText}>{submitError || statusError}</Text>
+            )}
           </View>
         )}
       </KeyboardAvoidingView>
@@ -242,5 +174,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  errorText: {
+    color: '#ff6b6b',
+    textAlign: 'center',
   },
 });

@@ -1,5 +1,6 @@
 const {
   S3Client,
+  HeadBucketCommand,
   HeadObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
@@ -9,6 +10,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { Upload } = require('@aws-sdk/lib-storage');
 const config = require('../config');
 
+// One client for every bucket: same account, same credentials, only the Bucket differs.
 const s3Client = new S3Client({
   region: 'auto',
   endpoint: config.r2.endpoint,
@@ -22,6 +24,14 @@ const TRACKS_INDEX_KEY = 'metadata/tracks.json';
 const GROUPS_INDEX_KEY = 'metadata/groups.json';
 const YOUTUBE_COOKIES_KEY = 'metadata/youtube-cookies.txt';
 
+function isMissing(error) {
+  return (
+    error?.$metadata?.httpStatusCode === 404 ||
+    error?.name === 'NotFound' ||
+    error?.Code === 'NoSuchKey'
+  );
+}
+
 async function streamToString(stream) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -31,9 +41,9 @@ async function streamToString(stream) {
   });
 }
 
-async function saveJson(key, data) {
+async function saveJson(bucket, key, data) {
   const command = new PutObjectCommand({
-    Bucket: config.r2.bucketName,
+    Bucket: bucket,
     Key: key,
     Body: JSON.stringify(data, null, 2),
     ContentType: 'application/json',
@@ -41,20 +51,14 @@ async function saveJson(key, data) {
   await s3Client.send(command);
 }
 
-async function getJson(key) {
-  const command = new GetObjectCommand({
-    Bucket: config.r2.bucketName,
-    Key: key,
-  });
+async function getJson(bucket, key) {
+  const command = new GetObjectCommand({ Bucket: bucket, Key: key });
   try {
     const result = await s3Client.send(command);
     const body = await streamToString(result.Body);
     return JSON.parse(body);
   } catch (error) {
-    if (error?.$metadata?.httpStatusCode === 404 || error?.name === 'NotFound') {
-      return null;
-    }
-    if (error?.Code === 'NoSuchKey') {
+    if (isMissing(error)) {
       return null;
     }
     throw error;
@@ -65,67 +69,50 @@ async function getJson(key) {
  * Returns the size in bytes of an object, or null when it does not exist.
  * Used to reject zero-byte objects left behind by a failed transcode.
  */
-async function getFileSize(key) {
-  const command = new HeadObjectCommand({
-    Bucket: config.r2.bucketName,
-    Key: key
-  });
+async function getFileSize(bucket, key) {
+  const command = new HeadObjectCommand({ Bucket: bucket, Key: key });
 
   try {
     const result = await s3Client.send(command);
     return typeof result.ContentLength === 'number' ? result.ContentLength : null;
   } catch (error) {
-    if (error?.$metadata?.httpStatusCode === 404 || error?.name === 'NotFound') {
+    if (isMissing(error)) {
       return null;
     }
-
-    if (error?.Code === 'NoSuchKey') {
-      return null;
-    }
-
     throw error;
   }
 }
 
-async function deleteObject(key) {
-  const command = new DeleteObjectCommand({
-    Bucket: config.r2.bucketName,
-    Key: key
-  });
+async function deleteObject(bucket, key) {
+  const command = new DeleteObjectCommand({ Bucket: bucket, Key: key });
 
   try {
     await s3Client.send(command);
   } catch (error) {
-    if (error?.$metadata?.httpStatusCode === 404 || error?.Code === 'NoSuchKey') {
+    if (isMissing(error)) {
       return;
     }
     throw error;
   }
 }
 
-async function getFileStream(key) {
-  const command = new GetObjectCommand({
-    Bucket: config.r2.bucketName,
-    Key: key
-  });
+async function getFileStream(bucket, key) {
+  const command = new GetObjectCommand({ Bucket: bucket, Key: key });
   const result = await s3Client.send(command);
   return result.Body;
 }
 
-async function getSignedFileUrl(key, expiresIn = 3600) {
-  const command = new GetObjectCommand({
-    Bucket: config.r2.bucketName,
-    Key: key
-  });
+async function getSignedFileUrl(bucket, key, expiresIn = 3600) {
+  const command = new GetObjectCommand({ Bucket: bucket, Key: key });
   const url = await getSignedUrl(s3Client, command, { expiresIn });
   return url;
 }
 
-function uploadStream(key, bodyStream) {
+function uploadStream(bucket, key, bodyStream) {
   const upload = new Upload({
     client: s3Client,
     params: {
-      Bucket: config.r2.bucketName,
+      Bucket: bucket,
       Key: key,
       Body: bodyStream,
       ContentType: 'audio/mpeg'
@@ -135,12 +122,12 @@ function uploadStream(key, bodyStream) {
   return upload.done();
 }
 
-async function getTrackIndex() {
-  return (await getJson(TRACKS_INDEX_KEY)) ?? {};
+async function getTrackIndex(bucket) {
+  return (await getJson(bucket, TRACKS_INDEX_KEY)) ?? {};
 }
 
-async function saveTrackMetadata(metadata) {
-  const index = await getTrackIndex();
+async function saveTrackMetadata(bucket, metadata) {
+  const index = await getTrackIndex(bucket);
   const existing = index[metadata.videoId];
   index[metadata.videoId] = {
     ...existing,
@@ -148,58 +135,48 @@ async function saveTrackMetadata(metadata) {
     createdAt: existing?.createdAt ?? metadata.createdAt,
     updatedAt: new Date().toISOString(),
   };
-  await saveJson(TRACKS_INDEX_KEY, index);
+  await saveJson(bucket, TRACKS_INDEX_KEY, index);
 }
 
-async function getTrackMetadata(videoId) {
-  const index = await getTrackIndex();
+async function getTrackMetadata(bucket, videoId) {
+  const index = await getTrackIndex(bucket);
   return index[videoId] ?? null;
 }
 
-async function listTracks() {
-  const index = await getTrackIndex();
+async function listTracks(bucket) {
+  const index = await getTrackIndex(bucket);
   return Object.values(index).sort((a, b) => {
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
 }
 
-async function getGroupsIndex() {
-  return (await getJson(GROUPS_INDEX_KEY)) ?? [];
+async function getGroupsIndex(bucket) {
+  return (await getJson(bucket, GROUPS_INDEX_KEY)) ?? [];
 }
 
-async function saveGroups(groups) {
-  await saveJson(GROUPS_INDEX_KEY, groups);
+async function saveGroups(bucket, groups) {
+  await saveJson(bucket, GROUPS_INDEX_KEY, groups);
 }
 
-async function listGroups() {
-  return await getGroupsIndex();
+async function listGroups(bucket) {
+  return await getGroupsIndex(bucket);
 }
 
-async function deleteTrack(videoId) {
-  const index = await getTrackIndex();
+async function deleteTrack(bucket, videoId) {
+  const index = await getTrackIndex(bucket);
   const metadata = index[videoId];
   if (!metadata) {
     return false;
   }
 
   if (metadata.storageKey) {
-    try {
-      const deleteCommand = new DeleteObjectCommand({
-        Bucket: config.r2.bucketName,
-        Key: metadata.storageKey,
-      });
-      await s3Client.send(deleteCommand);
-    } catch (error) {
-      if (error?.$metadata?.httpStatusCode !== 404 && error?.Code !== 'NoSuchKey') {
-        throw error;
-      }
-    }
+    await deleteObject(bucket, metadata.storageKey);
   }
 
   delete index[videoId];
-  await saveJson(TRACKS_INDEX_KEY, index);
+  await saveJson(bucket, TRACKS_INDEX_KEY, index);
 
-  const groups = await getGroupsIndex();
+  const groups = await getGroupsIndex(bucket);
   let mutated = false;
   const updatedGroups = groups.map((group) => {
     const filteredIds = (group.trackIds ?? []).filter((id) => id !== videoId);
@@ -210,82 +187,91 @@ async function deleteTrack(videoId) {
     return group;
   });
   if (mutated) {
-    await saveJson(GROUPS_INDEX_KEY, updatedGroups);
+    await saveJson(bucket, GROUPS_INDEX_KEY, updatedGroups);
   }
 
   return true;
 }
 
 /**
- * Save YouTube cookies to R2 for persistence across server restarts
+ * YouTube cookies live inside the tenant's own bucket, so each access code carries its own
+ * YouTube session rather than borrowing somebody else's.
  */
-async function saveYouTubeCookies(cookieData) {
+async function saveYouTubeCookies(bucket, cookieData) {
   const command = new PutObjectCommand({
-    Bucket: config.r2.bucketName,
+    Bucket: bucket,
     Key: YOUTUBE_COOKIES_KEY,
     Body: cookieData,
     ContentType: 'text/plain',
   });
   await s3Client.send(command);
-  console.log('[R2] YouTube cookies saved to R2');
+  console.log(`[R2] YouTube cookies saved to ${bucket}`);
 }
 
-/**
- * Load YouTube cookies from R2
- * Returns null if cookies don't exist
- */
-async function loadYouTubeCookies() {
-  const command = new GetObjectCommand({
-    Bucket: config.r2.bucketName,
-    Key: YOUTUBE_COOKIES_KEY,
-  });
+async function loadYouTubeCookies(bucket) {
+  const command = new GetObjectCommand({ Bucket: bucket, Key: YOUTUBE_COOKIES_KEY });
   try {
     const result = await s3Client.send(command);
     const body = await streamToString(result.Body);
-    console.log('[R2] YouTube cookies loaded from R2');
+    console.log(`[R2] YouTube cookies loaded from ${bucket}`);
     return body;
   } catch (error) {
-    if (error.name === 'NoSuchKey' || error.$metadata?.httpStatusCode === 404) {
-      console.log('[R2] No YouTube cookies found in R2');
+    if (isMissing(error)) {
+      console.log(`[R2] No YouTube cookies found in ${bucket}`);
       return null;
     }
     throw error;
   }
 }
 
+async function deleteYouTubeCookies(bucket) {
+  await deleteObject(bucket, YOUTUBE_COOKIES_KEY);
+  console.log(`[R2] YouTube cookies removed from ${bucket}`);
+}
+
 /**
- * Delete persisted YouTube cookies from R2
+ * A mistyped bucket name is otherwise indistinguishable from an empty library: every read
+ * comes back 404 and the tenant simply sees no music. Checking at startup turns that into
+ * an obvious error instead of a silent one.
  */
-async function deleteYouTubeCookies() {
-  const command = new DeleteObjectCommand({
-    Bucket: config.r2.bucketName,
-    Key: YOUTUBE_COOKIES_KEY,
-  });
+async function bucketExists(bucket) {
   try {
-    await s3Client.send(command);
-    console.log('[R2] YouTube cookies deleted from R2');
+    await s3Client.send(new HeadBucketCommand({ Bucket: bucket }));
+    return true;
   } catch (error) {
-    if (error?.$metadata?.httpStatusCode === 404 || error?.name === 'NoSuchKey') {
-      console.log('[R2] YouTube cookies not present in R2');
-      return;
+    if (isMissing(error) || error?.name === 'NoSuchBucket') {
+      return false;
     }
     throw error;
   }
 }
 
-module.exports = {
-  getFileSize,
-  deleteObject,
-  getFileStream,
-  getSignedFileUrl,
-  uploadStream,
-  saveTrackMetadata,
-  getTrackMetadata,
-  listTracks,
-  listGroups,
-  saveGroups,
-  deleteTrack,
-  saveYouTubeCookies,
-  loadYouTubeCookies,
-  deleteYouTubeCookies,
-};
+/**
+ * Every caller goes through here, so a request cannot reach storage without having first
+ * resolved which tenant - and therefore which bucket - it belongs to.
+ */
+function forBucket(bucket) {
+  if (!bucket) {
+    throw new Error('A bucket is required to access storage');
+  }
+
+  return {
+    bucket,
+    getFileSize: (key) => getFileSize(bucket, key),
+    deleteObject: (key) => deleteObject(bucket, key),
+    getFileStream: (key) => getFileStream(bucket, key),
+    getSignedFileUrl: (key, expiresIn) => getSignedFileUrl(bucket, key, expiresIn),
+    uploadStream: (key, bodyStream) => uploadStream(bucket, key, bodyStream),
+    saveTrackMetadata: (metadata) => saveTrackMetadata(bucket, metadata),
+    getTrackMetadata: (videoId) => getTrackMetadata(bucket, videoId),
+    listTracks: () => listTracks(bucket),
+    listGroups: () => listGroups(bucket),
+    saveGroups: (groups) => saveGroups(bucket, groups),
+    deleteTrack: (videoId) => deleteTrack(bucket, videoId),
+    saveYouTubeCookies: (cookieData) => saveYouTubeCookies(bucket, cookieData),
+    loadYouTubeCookies: () => loadYouTubeCookies(bucket),
+    deleteYouTubeCookies: () => deleteYouTubeCookies(bucket),
+  };
+}
+
+module.exports = { forBucket, bucketExists };

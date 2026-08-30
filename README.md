@@ -24,9 +24,10 @@ This will install dependencies for both packages because the root workspace is a
 
 ## Backend: Audio Stream Gateway
 
-1. Copy `apps/audio-stream-gateway/.env.example` to `.env` and fill in the Cloudflare R2 values (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, `R2_BUCKET_NAME`, optional `PORT`). Provide `YOUTUBE_API_KEY` (YouTube Data API v3) if you want to enable server-side search, and set `ACCESS_CODE` if you want clients to see the new access gate overlay before using the app (leave blank to disable).
-2. Make sure FFmpeg is available on your machine when running locally.
-3. Start the server:
+1. Copy `apps/audio-stream-gateway/.env.example` to `.env` and fill in the Cloudflare R2 values (`R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT`, optional `PORT`). Provide `YOUTUBE_API_KEY` (YouTube Data API v3) if you want to enable server-side search.
+2. Set `ACCESS_CODES` to a JSON object mapping each access code to the R2 bucket it unlocks, e.g. `{"alice-code":"kplayer-alice","bob-code":{"bucket":"kplayer-bob","label":"Bob"}}`. Each code gets its own library, groups and YouTube login; buckets must already exist. To keep the previous single-bucket behaviour, leave `ACCESS_CODES` unset and use `R2_BUCKET_NAME` with an optional `ACCESS_CODE` instead.
+3. Make sure FFmpeg is available on your machine when running locally.
+4. Start the server:
 
 ```bash
 pnpm dev:gateway
@@ -34,8 +35,12 @@ pnpm dev:gateway
 
 ### API
 
+Every data endpoint requires `Authorization: Bearer <token>`, where the token comes from `POST /api/access-control/verify`. The token identifies which bucket the request reads and writes, so the same endpoint returns a different library for a different access code. Only `/healthz` and the two access-control endpoints are public.
+
 - `GET /healthz` → simple JSON `{ status: 'ok' }`.
-- `GET /stream/:videoId` → streams `audio/mpeg`. When cache hits it reads straight from R2; cache misses trigger `ytdl-core` ➜ `ffmpeg` ➜ dual streaming (client + background upload).
+- `GET /api/access-control/status` → `{ enabled }`, i.e. whether an access code is required.
+- `POST /api/access-control/verify` → `{ code }` in, `{ success, token, expiresAt, label }` out.
+- `GET /stream/:videoId` → returns a presigned R2 URL when the audio is cached, or `202` while a background `yt-dlp` ➜ `ffmpeg` job caches it into that tenant's bucket.
 - `GET /tracks` → 返回所有已缓存歌曲的元数据（标题、作者、缩略图、R2 对象键等）。
 - `GET /search?q=<关键词>` → 调用 YouTube Data API 搜索音乐分类，返回前 5 条结果（标题、频道、缩略图、videoId）。
 - `DELETE /tracks/:videoId` → 删除缓存音频、元数据，并从所有分组中移除该曲目。

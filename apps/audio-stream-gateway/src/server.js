@@ -7,6 +7,7 @@ const { Transform } = require('stream');
 const fs = require('fs');
 const path = require('path');
 const config = require('./config');
+const auth = require('./auth');
 const storage = require('./storage/r2Storage');
 
 const app = express();
@@ -14,7 +15,13 @@ const app = express();
 const YOUTUBE_SEARCH_ENDPOINT = 'https://www.googleapis.com/youtube/v3/search';
 const MUSIC_CATEGORY_ID = '10';
 const YOUTUBE_MAX_RESULTS = 5;
-const COOKIES_FILE_PATH = path.join('/tmp', 'youtube-cookies.txt');
+
+// Each tenant keeps its own YouTube session, so cookies cannot share one path.
+function cookiesPathFor(tenant) {
+  const safeId = tenant.id.replace(/[^a-zA-Z0-9._-]/g, '_');
+  return path.join('/tmp', `youtube-cookies-${safeId}.txt`);
+}
+
 // An mp3 smaller than this cannot be real audio - it means the transcode produced
 // nothing (e.g. yt-dlp was blocked) and the object must not be treated as cached.
 const MIN_CACHED_BYTES = 4096;
@@ -34,18 +41,17 @@ app.get('/healthz', (_, res) => {
   res.json({ status: 'ok' });
 });
 
-const isAccessControlEnabled = Boolean(config.accessControl?.accessCode);
+const isAccessControlEnabled = config.accessControl.enabled;
 
+// Deliberately says nothing beyond whether a code is needed. It used to return a hash of
+// the code, which is public and offline-crackable - for a short code, trivially so.
 app.get('/api/access-control/status', (_req, res) => {
-  res.json({
-    enabled: isAccessControlEnabled,
-    version: isAccessControlEnabled ? config.accessControl.codeHash : null,
-  });
+  res.json({ enabled: isAccessControlEnabled });
 });
 
 app.post('/api/access-control/verify', (req, res) => {
   if (!isAccessControlEnabled) {
-    return res.json({ success: true, version: null });
+    return res.json({ success: true, token: null, expiresAt: null });
   }
 
   const code = typeof req.body?.code === 'string' ? req.body.code.trim() : '';
@@ -53,14 +59,19 @@ app.post('/api/access-control/verify', (req, res) => {
     return res.status(400).json({ success: false, message: 'Access code required' });
   }
 
-  if (code === config.accessControl.accessCode) {
-    return res.json({ success: true, version: config.accessControl.codeHash });
+  const tenant = auth.findTenantByCode(code);
+  if (!tenant) {
+    return res.status(401).json({ success: false, message: 'Access code invalid' });
   }
 
-  return res.status(401).json({ success: false, message: 'Access code invalid' });
+  const { token, expiresAt } = auth.issueToken(tenant);
+  console.log(`[Access] Issued token for ${tenant.label}`);
+  return res.json({ success: true, token, expiresAt, label: tenant.label });
 });
 
-app.get('/search', async (req, res) => {
+// Everything below reads or writes a tenant's bucket, or spends its YouTube quota, so it
+// all requires a token. req.tenant is set by the middleware and is the only way to a bucket.
+app.get('/search', auth.requireTenant, async (req, res) => {
   if (!config.youtube?.apiKey) {
     return res.status(503).json({ message: 'YouTube search is not configured' });
   }
@@ -79,29 +90,29 @@ app.get('/search', async (req, res) => {
   }
 });
 
-app.get('/tracks', async (_req, res, next) => {
+app.get('/tracks', auth.requireTenant, async (req, res, next) => {
   try {
-    const tracks = await storage.listTracks();
+    const tracks = await storage.forBucket(req.tenant.bucket).listTracks();
     res.json({ tracks });
   } catch (error) {
     next(error);
   }
 });
 
-app.get('/groups', async (_req, res, next) => {
+app.get('/groups', auth.requireTenant, async (req, res, next) => {
   try {
-    const groups = await storage.listGroups();
+    const groups = await storage.forBucket(req.tenant.bucket).listGroups();
     res.json({ groups });
   } catch (error) {
     next(error);
   }
 });
 
-app.delete('/tracks/:videoId', async (req, res, next) => {
+app.delete('/tracks/:videoId', auth.requireTenant, async (req, res, next) => {
   try {
     const rawId = req.params.videoId;
     const videoId = getVideoId(rawId) ?? rawId;
-    const deleted = await storage.deleteTrack(videoId);
+    const deleted = await storage.forBucket(req.tenant.bucket).deleteTrack(videoId);
     if (!deleted) {
       return res.status(404).json({ message: 'Track not found' });
     }
@@ -111,14 +122,15 @@ app.delete('/tracks/:videoId', async (req, res, next) => {
   }
 });
 
-app.post('/groups', async (req, res, next) => {
+app.post('/groups', auth.requireTenant, async (req, res, next) => {
   try {
+    const store = storage.forBucket(req.tenant.bucket);
     const { name, trackIds } = req.body ?? {};
     if (!name || typeof name !== 'string') {
       return res.status(400).json({ message: 'Group name is required' });
     }
     const sanitizedTrackIds = Array.isArray(trackIds) ? trackIds : [];
-    const groups = await storage.listGroups();
+    const groups = await store.listGroups();
     const newGroup = {
       id: randomUUID(),
       name: name.trim(),
@@ -127,18 +139,19 @@ app.post('/groups', async (req, res, next) => {
       updatedAt: new Date().toISOString(),
     };
     groups.push(newGroup);
-    await storage.saveGroups(groups);
+    await store.saveGroups(groups);
     res.status(201).json(newGroup);
   } catch (error) {
     next(error);
   }
 });
 
-app.put('/groups/:groupId', async (req, res, next) => {
+app.put('/groups/:groupId', auth.requireTenant, async (req, res, next) => {
   try {
+    const store = storage.forBucket(req.tenant.bucket);
     const { groupId } = req.params;
     const { name, trackIds } = req.body ?? {};
-    const groups = await storage.listGroups();
+    const groups = await store.listGroups();
     const index = groups.findIndex((group) => group.id === groupId);
     if (index === -1) {
       return res.status(404).json({ message: 'Group not found' });
@@ -150,22 +163,23 @@ app.put('/groups/:groupId', async (req, res, next) => {
       groups[index].trackIds = trackIds;
     }
     groups[index].updatedAt = new Date().toISOString();
-    await storage.saveGroups(groups);
+    await store.saveGroups(groups);
     res.json(groups[index]);
   } catch (error) {
     next(error);
   }
 });
 
-app.delete('/groups/:groupId', async (req, res, next) => {
+app.delete('/groups/:groupId', auth.requireTenant, async (req, res, next) => {
   try {
+    const store = storage.forBucket(req.tenant.bucket);
     const { groupId } = req.params;
-    const groups = await storage.listGroups();
+    const groups = await store.listGroups();
     const nextGroups = groups.filter((group) => group.id !== groupId);
     if (nextGroups.length === groups.length) {
       return res.status(404).json({ message: 'Group not found' });
     }
-    await storage.saveGroups(nextGroups);
+    await store.saveGroups(nextGroups);
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -206,17 +220,18 @@ function buildObjectKey(title, videoId) {
   return `audio/${slug}-${videoId}.mp3`;
 }
 
-// Helper function to build yt-dlp args with cookies if available
-function buildYtDlpArgs(baseArgs) {
+// Helper function to build yt-dlp args with the requesting tenant's cookies, if any
+function buildYtDlpArgs(baseArgs, tenant) {
   const args = [...baseArgs];
-  if (fs.existsSync(COOKIES_FILE_PATH)) {
-    args.push('--cookies', COOKIES_FILE_PATH);
-    console.log('[yt-dlp] Using cookies file');
+  const cookiesPath = cookiesPathFor(tenant);
+  if (fs.existsSync(cookiesPath)) {
+    args.push('--cookies', cookiesPath);
+    console.log(`[yt-dlp] Using cookies file for ${tenant.label}`);
   }
   return args;
 }
 
-async function fetchVideoInfo(videoId) {
+async function fetchVideoInfo(videoId, tenant) {
   const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
   return new Promise((resolve, reject) => {
     const args = buildYtDlpArgs([
@@ -224,7 +239,7 @@ async function fetchVideoInfo(videoId) {
       '--no-warnings',
       '--skip-download',
       youtubeUrl,
-    ]);
+    ], tenant);
     const infoProcess = spawn('yt-dlp', args);
 
     let stdout = '';
@@ -320,7 +335,7 @@ function lastStderrLines(text, maxLines = 3) {
  * transcode that failed silently, so it is purged instead of being served - otherwise the
  * client receives a valid URL to an empty file and buffers forever without any error.
  */
-async function resolveCachedKey(videoId, existingMetadata) {
+async function resolveCachedKey(store, videoId, existingMetadata) {
   const candidates = [
     existingMetadata?.storageKey,
     buildObjectKey(videoId, videoId),
@@ -328,14 +343,14 @@ async function resolveCachedKey(videoId, existingMetadata) {
   ].filter(Boolean);
 
   for (const key of new Set(candidates)) {
-    const size = await storage.getFileSize(key);
+    const size = await store.getFileSize(key);
     if (size === null) {
       continue;
     }
 
     if (size < MIN_CACHED_BYTES) {
       console.warn(`[Stream] Discarding empty cache object for ${videoId} (${size} bytes, key ${key})`);
-      await storage.deleteObject(key).catch((error) => {
+      await store.deleteObject(key).catch((error) => {
         console.error(`[Stream] Failed to delete empty object ${key}`, error);
       });
       continue;
@@ -347,7 +362,7 @@ async function resolveCachedKey(videoId, existingMetadata) {
   return null;
 }
 
-app.get('/stream/:videoId', async (req, res, next) => {
+app.get('/stream/:videoId', auth.requireTenant, async (req, res, next) => {
   const rawVideoId = req.params.videoId;
   const videoId = getVideoId(rawVideoId);
 
@@ -355,14 +370,19 @@ app.get('/stream/:videoId', async (req, res, next) => {
     return res.status(400).json({ message: 'Invalid video id' });
   }
 
+  const tenant = req.tenant;
+  const store = storage.forBucket(tenant.bucket);
+  // Two tenants caching the same video are two independent jobs writing to two buckets.
+  const jobKey = `${tenant.id}:${videoId}`;
+
   try {
-    const existingMetadata = await storage.getTrackMetadata(videoId);
-    let cacheKey = await resolveCachedKey(videoId, existingMetadata);
+    const existingMetadata = await store.getTrackMetadata(videoId);
+    let cacheKey = await resolveCachedKey(store, videoId, existingMetadata);
 
     if (cacheKey) {
       // Track is cached - return R2 signed URL
       console.log(`[Stream] Serving ${videoId} from cache (R2 URL)`);
-      const signedUrl = await storage.getSignedFileUrl(cacheKey, 3600); // 1 hour expiry
+      const signedUrl = await store.getSignedFileUrl(cacheKey, 3600); // 1 hour expiry
       return res.json({
         cached: true,
         url: signedUrl,
@@ -372,13 +392,13 @@ app.get('/stream/:videoId', async (req, res, next) => {
     }
 
     // Track is not cached - check if caching is already in progress
-    if (cachingJobs.has(videoId)) {
-      const job = cachingJobs.get(videoId);
+    if (cachingJobs.has(jobKey)) {
+      const job = cachingJobs.get(jobKey);
 
       // Check if caching failed with an error
       if (job.error) {
         console.log(`[Stream] Cache job failed for ${videoId}: ${job.error}`);
-        cachingJobs.delete(videoId); // Clean up failed job
+        cachingJobs.delete(jobKey); // Clean up failed job
         return res.status(500).json({
           cached: false,
           caching: false,
@@ -400,7 +420,7 @@ app.get('/stream/:videoId', async (req, res, next) => {
       }
 
       console.warn(`[Stream] Discarding stale cache job for ${videoId}`);
-      cachingJobs.delete(videoId);
+      cachingJobs.delete(jobKey);
     }
 
     // Start background caching job
@@ -409,7 +429,7 @@ app.get('/stream/:videoId', async (req, res, next) => {
     cacheKey = objectKey;
 
     // Mark job as in progress
-    cachingJobs.set(videoId, { startTime: Date.now(), cacheKey });
+    cachingJobs.set(jobKey, { startTime: Date.now(), cacheKey });
 
     // Return 202 immediately - don't wait for caching to complete
     res.status(202).json({
@@ -428,7 +448,7 @@ app.get('/stream/:videoId', async (req, res, next) => {
         '--quiet',
         '--no-warnings',
         youtubeUrl
-      ]);
+      ], tenant);
 
       let failure = null;
       let bytesTranscoded = 0;
@@ -509,7 +529,7 @@ app.get('/stream/:videoId', async (req, res, next) => {
       });
 
       let uploadError = null;
-      const uploadFinished = storage.uploadStream(cacheKey, cacheStream).catch((error) => {
+      const uploadFinished = store.uploadStream(cacheKey, cacheStream).catch((error) => {
         uploadError = error;
       });
 
@@ -531,7 +551,7 @@ app.get('/stream/:videoId', async (req, res, next) => {
       // Deciding on the absence of an error message instead is what let a completed
       // transcode be thrown away over a harmless "Output stream closed".
       if (!failure) {
-        const storedSize = await storage.getFileSize(cacheKey);
+        const storedSize = await store.getFileSize(cacheKey);
         if (storedSize !== bytesTranscoded) {
           recordFailure(
             `Cached object is incomplete (stored ${storedSize ?? 'nothing'} of ${bytesTranscoded} bytes)`
@@ -543,10 +563,10 @@ app.get('/stream/:videoId', async (req, res, next) => {
         console.error(`[Cache] Failed to cache ${videoId}: ${failure}`);
         // Leave nothing behind: an empty object would be served as a valid cache hit, and
         // metadata would make the client believe the track is ready to play.
-        await storage.deleteObject(cacheKey).catch((error) => {
+        await store.deleteObject(cacheKey).catch((error) => {
           console.error(`[Cache] Failed to clean up ${cacheKey}`, error);
         });
-        const job = cachingJobs.get(videoId);
+        const job = cachingJobs.get(jobKey);
         if (job) {
           job.error = failure;
         }
@@ -555,12 +575,12 @@ app.get('/stream/:videoId', async (req, res, next) => {
 
       // Deliberately sequential: each yt-dlp run spawns its own JS runtime to solve
       // YouTube's challenge, and two of those alongside ffmpeg exceeds a 512MB instance.
-      const videoInfo = await fetchVideoInfo(videoId).catch((error) => {
+      const videoInfo = await fetchVideoInfo(videoId, tenant).catch((error) => {
         console.error(`[Cache] Failed to fetch metadata for ${videoId}`, error);
         return null;
       });
       const thumbnails = Array.isArray(videoInfo?.thumbnails) ? videoInfo.thumbnails : [];
-      await storage.saveTrackMetadata({
+      await store.saveTrackMetadata({
         videoId,
         storageKey: cacheKey,
         title: videoInfo?.title ?? videoId,
@@ -571,10 +591,10 @@ app.get('/stream/:videoId', async (req, res, next) => {
       });
 
       console.log(`[Cache] Successfully cached ${videoId} in R2 (${bytesTranscoded} bytes)`);
-      cachingJobs.delete(videoId);
+      cachingJobs.delete(jobKey);
     })().catch((error) => {
       console.error(`[Cache] Unexpected failure while caching ${videoId}`, error);
-      const job = cachingJobs.get(videoId);
+      const job = cachingJobs.get(jobKey);
       if (job) {
         job.error = `Caching failed: ${error.message}`;
       }
@@ -586,7 +606,7 @@ app.get('/stream/:videoId', async (req, res, next) => {
 });
 
 // YouTube Cookies Management
-app.post('/api/youtube-cookies', async (req, res) => {
+app.post('/api/youtube-cookies', auth.requireTenant, async (req, res) => {
   try {
     const { cookies } = req.body;
 
@@ -595,12 +615,12 @@ app.post('/api/youtube-cookies', async (req, res) => {
     }
 
     // Write cookies to local file in Netscape format (yt-dlp compatible)
-    fs.writeFileSync(COOKIES_FILE_PATH, cookies, 'utf8');
-    console.log('[Cookies] YouTube cookies saved to local file');
+    fs.writeFileSync(cookiesPathFor(req.tenant), cookies, 'utf8');
+    console.log(`[Cookies] YouTube cookies saved locally for ${req.tenant.label}`);
 
     // Also save to R2 for persistence across server restarts
     try {
-      await storage.saveYouTubeCookies(cookies);
+      await storage.forBucket(req.tenant.bucket).saveYouTubeCookies(cookies);
       console.log('[Cookies] YouTube cookies saved to R2 for persistence');
     } catch (r2Error) {
       console.error('[Cookies] Failed to save cookies to R2', r2Error);
@@ -617,9 +637,10 @@ app.post('/api/youtube-cookies', async (req, res) => {
   }
 });
 
-app.get('/api/youtube-cookies/status', (req, res) => {
+app.get('/api/youtube-cookies/status', auth.requireTenant, (req, res) => {
   try {
-    const exists = fs.existsSync(COOKIES_FILE_PATH);
+    const cookiesPath = cookiesPathFor(req.tenant);
+    const exists = fs.existsSync(cookiesPath);
 
     if (!exists) {
       return res.json({
@@ -628,7 +649,7 @@ app.get('/api/youtube-cookies/status', (req, res) => {
       });
     }
 
-    const stats = fs.statSync(COOKIES_FILE_PATH);
+    const stats = fs.statSync(cookiesPath);
     const ageHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
 
     res.json({
@@ -643,17 +664,18 @@ app.get('/api/youtube-cookies/status', (req, res) => {
   }
 });
 
-app.delete('/api/youtube-cookies', async (_req, res) => {
+app.delete('/api/youtube-cookies', auth.requireTenant, async (req, res) => {
   try {
+    const cookiesPath = cookiesPathFor(req.tenant);
     let deletedLocal = false;
-    if (fs.existsSync(COOKIES_FILE_PATH)) {
-      fs.unlinkSync(COOKIES_FILE_PATH);
+    if (fs.existsSync(cookiesPath)) {
+      fs.unlinkSync(cookiesPath);
       deletedLocal = true;
       console.log('[Cookies] Local YouTube cookies file deleted');
     }
 
     try {
-      await storage.deleteYouTubeCookies();
+      await storage.forBucket(req.tenant.bucket).deleteYouTubeCookies();
     } catch (error) {
       console.error('[Cookies] Failed to delete cookies from R2', error);
       return res.status(500).json({ message: 'Failed to delete cookies from R2' });
@@ -675,34 +697,63 @@ app.use((err, _req, res, _next) => {
   if (res.headersSent) {
     return res.end();
   }
+  // A malformed body is the caller's fault, and body-parser already says so - reporting it
+  // as 500 sends the client looking for a server fault that is not there.
+  const status = Number(err?.status || err?.statusCode);
+  if (status >= 400 && status < 500) {
+    return res.status(status).json({ message: err.message || 'Bad Request' });
+  }
   return res.status(500).json({ message: 'Internal Server Error' });
 });
 
 /**
- * Load YouTube cookies from R2 if local file doesn't exist
- * This ensures cookies persist across server restarts on ephemeral platforms like Render
+ * Load each tenant's YouTube cookies from its own bucket when the local copy is missing.
+ * This ensures cookies persist across server restarts on ephemeral platforms like Render.
  */
-async function loadCookiesOnStartup() {
-  // Check if local cookies file exists
-  if (fs.existsSync(COOKIES_FILE_PATH)) {
-    console.log('[Startup] Local YouTube cookies file found');
-    return;
+function configuredTenants() {
+  if (config.accessControl.enabled) {
+    return [...config.accessControl.tenantsById.values()];
   }
+  return config.defaultTenant ? [config.defaultTenant] : [];
+}
 
-  console.log('[Startup] No local cookies file found, checking R2...');
+async function loadCookiesOnStartup() {
+  const tenants = configuredTenants();
+  console.log(`[Startup] ${tenants.length} tenant(s) configured`);
 
-  try {
-    const cookiesFromR2 = await storage.loadYouTubeCookies();
-
-    if (cookiesFromR2) {
-      // Write cookies from R2 to local file
-      fs.writeFileSync(COOKIES_FILE_PATH, cookiesFromR2, 'utf8');
-      console.log('[Startup] YouTube cookies restored from R2 to local file');
-    } else {
-      console.log('[Startup] No cookies found in R2. User will need to login.');
+  for (const tenant of tenants) {
+    try {
+      if (!(await storage.bucketExists(tenant.bucket))) {
+        // Loud, because the symptom is otherwise just an empty library for that code.
+        console.error(
+          `[Startup] Bucket "${tenant.bucket}" for ${tenant.label} does not exist or is not reachable - that access code will see nothing`
+        );
+        continue;
+      }
+    } catch (error) {
+      console.error(`[Startup] Could not check bucket for ${tenant.label}`, error);
     }
-  } catch (error) {
-    console.error('[Startup] Failed to load cookies from R2', error);
+
+    const cookiesPath = cookiesPathFor(tenant);
+
+    if (fs.existsSync(cookiesPath)) {
+      console.log(`[Startup] Local YouTube cookies found for ${tenant.label}`);
+      continue;
+    }
+
+    try {
+      const cookiesFromR2 = await storage.forBucket(tenant.bucket).loadYouTubeCookies();
+
+      if (cookiesFromR2) {
+        fs.writeFileSync(cookiesPath, cookiesFromR2, 'utf8');
+        console.log(`[Startup] YouTube cookies restored for ${tenant.label}`);
+      } else {
+        console.log(`[Startup] No cookies in R2 for ${tenant.label} - login required`);
+      }
+    } catch (error) {
+      // One unreachable bucket must not stop the rest of the tenants from starting.
+      console.error(`[Startup] Failed to load cookies for ${tenant.label}`, error);
+    }
   }
 }
 
