@@ -6,9 +6,12 @@
 
 set -e
 
+GATEWAY_DIR=/app/apps/audio-stream-gateway
+
 if [ "${YTDLP_AUTO_UPDATE:-true}" = "true" ]; then
   echo "[Startup] Updating yt-dlp (current: $(yt-dlp --version 2>/dev/null || echo 'unknown'))..."
-  if timeout "${YTDLP_UPDATE_TIMEOUT:-120}" /opt/yt-dlp/bin/pip install --no-cache-dir --upgrade --quiet yt-dlp yt-dlp-ejs; then
+  if timeout "${YTDLP_UPDATE_TIMEOUT:-120}" /opt/yt-dlp/bin/pip install --no-cache-dir --upgrade --quiet \
+       yt-dlp yt-dlp-ejs bgutil-ytdlp-pot-provider; then
     echo "[Startup] yt-dlp updated to $(yt-dlp --version 2>/dev/null || echo 'unknown')"
   else
     # Never block startup on this - a stale yt-dlp still serves everything already cached.
@@ -18,80 +21,43 @@ else
   echo "[Startup] yt-dlp auto-update disabled (version: $(yt-dlp --version 2>/dev/null || echo 'unknown'))"
 fi
 
+# Proof-of-origin tokens make the requests look less like automation. The plugin finds this
+# server on its default port, so nothing needs passing to yt-dlp itself.
+#
+# Off by default because of what it costs: the BotGuard VM sits at ~144MiB resident, and a
+# cache job has been measured peaking at 384MiB on its own when yt-dlp has to solve the
+# signature challenge. On a 512MiB instance those do not both fit, and exceeding the limit
+# kills the challenge solver rather than the container - which degrades extraction silently
+# into "Requested format is not available" instead of failing honestly. Capping the V8 heap
+# does not help; the memory is not in the old space. Enable it only on an instance with the
+# headroom, or once the proxy alone has been shown to be insufficient.
+if [ "${POT_PROVIDER_ENABLED:-false}" = "true" ]; then
+  node --max-old-space-size="${POT_PROVIDER_HEAP_MB:-128}" /opt/bgutil/server/build/main.js >/tmp/bgutil.log 2>&1 &
+  i=0
+  while [ "$i" -lt 15 ]; do
+    if curl -fsS --max-time 2 "http://127.0.0.1:${POT_PROVIDER_PORT:-4416}/ping" >/dev/null 2>&1; then
+      echo "[Startup] PO token provider ready"
+      break
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  if [ "$i" -ge 15 ]; then
+    echo "[Startup] PO token provider did not respond; yt-dlp will run without tokens" >&2
+  fi
+fi
+
 # YouTube's bot check follows the source address: the same request succeeds from a home
 # connection and fails from shared cloud egress, with or without cookies. Cloudflare WARP
 # gives a different exit for free, and wireproxy speaks WireGuard in userspace so no TUN
 # device or NET_ADMIN is needed - a container here is granted neither.
 #
-# Opt-in via WARP_PROXY_ENABLED=true. On success this exports YTDLP_PROXY, which is the
-# only thing the server reads, so a paid proxy can be substituted by setting that directly.
-WARP_PROXY_PORT="${WARP_PROXY_PORT:-40000}"
-WARP_DIR=/tmp/warp
-
-start_warp_proxy() {
-  mkdir -p "$WARP_DIR"
-  cd "$WARP_DIR"
-
-  echo "[Startup] Enrolling a Cloudflare WARP identity..."
-  if ! timeout "${WARP_SETUP_TIMEOUT:-60}" wgcf register --accept-tos >/dev/null 2>&1; then
-    echo "[Startup] WARP registration failed" >&2
-    return 1
-  fi
-
-  if ! timeout "${WARP_SETUP_TIMEOUT:-60}" wgcf generate >/dev/null 2>&1; then
-    echo "[Startup] WARP profile generation failed" >&2
-    return 1
-  fi
-
-  # wireproxy reads a WireGuard profile plus its own sections. MTU is not one of the keys
-  # it understands, so drop it rather than let the whole profile be rejected.
-  grep -v '^MTU' wgcf-profile.conf > wireproxy.conf
-
-  # wgcf assigns both an IPv4 and an IPv6 address on one Address line. YouTube's media
-  # hosts serve the manifest happily and then answer the media request with 403 over many
-  # IPv6 ranges, so keep the tunnel on IPv4 unless asked otherwise.
-  if [ "${WARP_IPV6:-false}" != "true" ]; then
-    sed -i -E 's|^(Address = [0-9.]+/32), .*|\1|' wireproxy.conf
-    echo "[Startup] WARP tunnel restricted to IPv4 (set WARP_IPV6=true to allow IPv6)"
-  fi
-  cat >> wireproxy.conf <<EOF
-
-[Socks5]
-BindAddress = 127.0.0.1:${WARP_PROXY_PORT}
-EOF
-
-  wireproxy -c "$WARP_DIR/wireproxy.conf" >"$WARP_DIR/wireproxy.log" 2>&1 &
-
-  # Confirm the tunnel actually carries traffic. A listening port only proves wireproxy
-  # started; it says nothing about whether WARP came up behind it.
-  i=0
-  while [ "$i" -lt 20 ]; do
-    if curl -fsS --max-time 5 --socks5-hostname "127.0.0.1:${WARP_PROXY_PORT}" \
-         https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q '^warp=on'; then
-      echo "[Startup] WARP proxy ready on 127.0.0.1:${WARP_PROXY_PORT}"
-      return 0
-    fi
-    i=$((i + 1))
-    sleep 1
-  done
-
-  echo "[Startup] WARP proxy did not come up; last log:" >&2
-  tail -5 "$WARP_DIR/wireproxy.log" >&2 2>/dev/null || true
-  return 1
-}
-
+# The manager runs in the background because finding a usable exit can take a few rounds,
+# and the gateway should serve already-cached tracks while that happens. It publishes the
+# proxy address to a file the server reads per download.
 if [ "${WARP_PROXY_ENABLED:-false}" = "true" ]; then
-  if start_warp_proxy; then
-    export YTDLP_PROXY="socks5://127.0.0.1:${WARP_PROXY_PORT}"
-    echo "[Startup] yt-dlp will download through $YTDLP_PROXY"
-  else
-    # Fail open: without the proxy downloads behave exactly as they do today, which is
-    # better than refusing to serve the tracks that are already cached.
-    echo "[Startup] Continuing without a proxy - downloads may hit YouTube's bot check" >&2
-  fi
-elif [ -n "$YTDLP_PROXY" ]; then
-  echo "[Startup] yt-dlp will download through the configured proxy"
+  "$GATEWAY_DIR/warp-manager.sh" &
 fi
 
-cd /app/apps/audio-stream-gateway
+cd "$GATEWAY_DIR"
 exec "$@"
