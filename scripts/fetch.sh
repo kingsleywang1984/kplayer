@@ -6,8 +6,12 @@
 # container image the gateway uses, writing to the same R2 buckets, so nothing about the
 # stored tracks differs from one fetched by the server itself.
 #
-#   ./scripts/fetch.sh                    fetch everything queued from the app
-#   ./scripts/fetch.sh dQw4w9WgXcQ ...    fetch specific videos without queueing first
+#   ./scripts/fetch.sh                              everything queued, for every access code
+#   ./scripts/fetch.sh --tenant oz                  only that access code's queue
+#   ./scripts/fetch.sh --tenant oz dQw4w9WgXcQ      a specific video, without queueing first
+#
+# Queues say who wanted what, so draining them needs no --tenant. Naming a video does,
+# unless only one access code is configured - otherwise it would be stored for everyone.
 #
 # Requires Docker and apps/audio-stream-gateway/.env with the R2 credentials.
 

@@ -11,8 +11,9 @@
  * Run it after queueing downloads in the app; the tracks appear in the library when it
  * finishes. A video id can also be passed directly to fetch it without queueing first.
  *
- *   node src/fetchWorker.js                 drain every tenant's queue
- *   node src/fetchWorker.js <videoId> ...   fetch these, for every tenant that wants them
+ *   node src/fetchWorker.js                            drain every tenant's queue
+ *   node src/fetchWorker.js --tenant oz <videoId> ...   fetch these into one tenant
+ *   node src/fetchWorker.js --tenant oz                 drain just that tenant's queue
  */
 
 const fs = require('fs');
@@ -22,11 +23,50 @@ const storage = require('./storage/r2Storage');
 const trackCache = require('./trackCache');
 const queue = require('./downloadQueue');
 
-function tenants() {
+function allTenants() {
   if (config.accessControl.enabled) {
     return [...config.accessControl.tenantsById.values()];
   }
   return config.defaultTenant ? [config.defaultTenant] : [];
+}
+
+/**
+ * Draining queues covers every tenant, because each queue already says who wanted what.
+ * Named video ids do not carry that, and fetching them for everyone would put a copy in
+ * every bucket - so those require --tenant unless there is only one to choose from.
+ */
+function parseArgs(argv) {
+  const videoIds = [];
+  let tenantName = null;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === '--tenant') {
+      tenantName = argv[i + 1];
+      i += 1;
+    } else {
+      videoIds.push(argv[i]);
+    }
+  }
+
+  const available = allTenants();
+  let selected = available;
+
+  if (tenantName) {
+    selected = available.filter(
+      (tenant) => tenant.label === tenantName || tenant.bucket === tenantName
+    );
+    if (!selected.length) {
+      const names = available.map((tenant) => tenant.label).join(', ');
+      throw new Error(`No tenant called "${tenantName}". Available: ${names}`);
+    }
+  } else if (videoIds.length && available.length > 1) {
+    const names = available.map((tenant) => tenant.label).join(', ');
+    throw new Error(
+      `Naming videos needs --tenant, or they would be stored for everyone. Available: ${names}`
+    );
+  }
+
+  return { videoIds, tenants: selected };
 }
 
 /**
@@ -81,16 +121,16 @@ async function fetchOne(tenant, store, videoId) {
 }
 
 async function main() {
-  const requested = process.argv.slice(2);
+  const { videoIds, tenants } = parseArgs(process.argv.slice(2));
   let attempted = 0;
   let succeeded = 0;
 
-  for (const tenant of tenants()) {
+  for (const tenant of tenants) {
     const store = storage.forBucket(tenant.bucket);
     await restoreCookies(tenant, store);
 
-    const pending = requested.length
-      ? requested
+    const pending = videoIds.length
+      ? videoIds
       : (await queue.list(store)).map((entry) => entry.videoId);
 
     if (!pending.length) {
@@ -113,6 +153,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('[Fetch] Unexpected failure', error);
+  console.error(`[Fetch] ${error.message}`);
   process.exit(1);
 });
