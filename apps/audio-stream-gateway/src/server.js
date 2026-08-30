@@ -224,6 +224,25 @@ function buildObjectKey(title, videoId) {
   return `audio/${slug}-${videoId}.mp3`;
 }
 
+const PROXY_FILE = path.join('/tmp', 'warp', 'proxy.url');
+
+/**
+ * YTDLP_PROXY pins a proxy explicitly; otherwise the WARP manager writes one here once it
+ * has verified an exit end to end, and removes it when no exit is usable. Absent means go
+ * out directly, which is better than routing through a tunnel known not to work.
+ */
+function currentProxy() {
+  if (process.env.YTDLP_PROXY) {
+    return process.env.YTDLP_PROXY;
+  }
+  try {
+    const value = fs.readFileSync(PROXY_FILE, 'utf8').trim();
+    return value || null;
+  } catch {
+    return null;
+  }
+}
+
 // Helper function to build yt-dlp args with the requesting tenant's cookies, if any
 function buildYtDlpArgs(baseArgs, tenant) {
   const args = [...baseArgs];
@@ -232,11 +251,13 @@ function buildYtDlpArgs(baseArgs, tenant) {
     args.push('--cookies', cookiesPath);
     console.log(`[yt-dlp] Using cookies file for ${tenant.label}`);
   }
-  // Set by the entrypoint once a proxy is confirmed working, or supplied directly to point
-  // at some other proxy. YouTube's bot check keys on the source address, so this is the
-  // part that decides whether a download is allowed at all - cookies do not change it.
-  if (process.env.YTDLP_PROXY) {
-    args.push('--proxy', process.env.YTDLP_PROXY);
+  // YouTube's bot check keys on the source address, so the proxy decides whether a
+  // download is allowed at all - cookies do not change it. The WARP manager republishes
+  // this file whenever it re-establishes an exit, so read it per call rather than caching
+  // an address that may since have been replaced.
+  const proxy = currentProxy();
+  if (proxy) {
+    args.push('--proxy', proxy);
   }
   return args;
 }

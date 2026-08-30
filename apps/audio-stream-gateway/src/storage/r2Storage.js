@@ -193,35 +193,42 @@ async function deleteTrack(bucket, videoId) {
   return true;
 }
 
+async function putText(bucket, key, body, contentType = 'text/plain') {
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: body,
+    ContentType: contentType,
+  });
+  await s3Client.send(command);
+}
+
+async function getText(bucket, key) {
+  const command = new GetObjectCommand({ Bucket: bucket, Key: key });
+  try {
+    const result = await s3Client.send(command);
+    return await streamToString(result.Body);
+  } catch (error) {
+    if (isMissing(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
 /**
  * YouTube cookies live inside the tenant's own bucket, so each access code carries its own
  * YouTube session rather than borrowing somebody else's.
  */
 async function saveYouTubeCookies(bucket, cookieData) {
-  const command = new PutObjectCommand({
-    Bucket: bucket,
-    Key: YOUTUBE_COOKIES_KEY,
-    Body: cookieData,
-    ContentType: 'text/plain',
-  });
-  await s3Client.send(command);
+  await putText(bucket, YOUTUBE_COOKIES_KEY, cookieData);
   console.log(`[R2] YouTube cookies saved to ${bucket}`);
 }
 
 async function loadYouTubeCookies(bucket) {
-  const command = new GetObjectCommand({ Bucket: bucket, Key: YOUTUBE_COOKIES_KEY });
-  try {
-    const result = await s3Client.send(command);
-    const body = await streamToString(result.Body);
-    console.log(`[R2] YouTube cookies loaded from ${bucket}`);
-    return body;
-  } catch (error) {
-    if (isMissing(error)) {
-      console.log(`[R2] No YouTube cookies found in ${bucket}`);
-      return null;
-    }
-    throw error;
-  }
+  const body = await getText(bucket, YOUTUBE_COOKIES_KEY);
+  console.log(body ? `[R2] YouTube cookies loaded from ${bucket}` : `[R2] No YouTube cookies found in ${bucket}`);
+  return body;
 }
 
 async function deleteYouTubeCookies(bucket) {
@@ -257,6 +264,8 @@ function forBucket(bucket) {
 
   return {
     bucket,
+    getText: (key) => getText(bucket, key),
+    putText: (key, body, contentType) => putText(bucket, key, body, contentType),
     getFileSize: (key) => getFileSize(bucket, key),
     deleteObject: (key) => deleteObject(bucket, key),
     getFileStream: (key) => getFileStream(bucket, key),
